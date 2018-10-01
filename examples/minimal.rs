@@ -10,14 +10,15 @@ use euclid::{Point2D, Rect, Size2D};
 use gleam::gl::{self, GLint, GlType};
 use self::gl_context::{ColorAttachmentType, GLContext, GLContextAttributes, GLVersion};
 use self::gl_context::{NativeGLContext};
-use planeshift::{Context, CoreAnimationBackend, Surface};
+use planeshift::Context;
+use planeshift::backends::default::Surface;
 use winit::{ControlFlow, Event, EventsLoop, Window, WindowEvent};
 
 pub fn main() {
     let mut event_loop = EventsLoop::new();
     let window = Window::new(&event_loop).unwrap();
 
-    let mut context: Context<CoreAnimationBackend> = Context::new();
+    let mut context = Context::new();
     context.begin_transaction();
 
     let layer = context.add_surface_layer();
