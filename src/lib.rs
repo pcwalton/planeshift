@@ -55,15 +55,30 @@ pub trait Backend {
     fn delete_layer(&mut self, layer: LayerId);
 
     // Layer tree management
-    fn insert_before(&mut self, parent: LayerId, new_child: LayerId, reference: Option<LayerId>);
+    fn insert_before(&mut self,
+                     parent: LayerId,
+                     new_child: LayerId,
+                     reference: Option<LayerId>,
+                     tree_component: &LayerMap<LayerTreeInfo>,
+                     container_component: &LayerMap<LayerContainerInfo>,
+                     geometry_component: &LayerMap<LayerGeometryInfo>);
     fn remove_from_superlayer(&mut self, layer: LayerId);
 
     // Native hosting
-    fn host_layer(&mut self, layer: LayerId, host: Self::Host);
+    fn host_layer(&mut self,
+                  layer: LayerId,
+                  host: Self::Host,
+                  tree_component: &LayerMap<LayerTreeInfo>,
+                  container_component: &LayerMap<LayerContainerInfo>,
+                  geometry_component: &LayerMap<LayerGeometryInfo>);
     fn unhost_layer(&mut self, layer: LayerId);
 
     // Geometry
-    fn set_layer_bounds(&mut self, layer: LayerId, new_bounds: &Rect<f32>);
+    fn set_layer_bounds(&mut self,
+                        layer: LayerId,
+                        tree_component: &LayerMap<LayerTreeInfo>,
+                        container_component: &LayerMap<LayerContainerInfo>,
+                        geometry_component: &LayerMap<LayerGeometryInfo>);
 
     // Surface management
     fn set_layer_contents(&mut self, layer: LayerId, new_surface: &Self::Surface);
@@ -73,18 +88,21 @@ pub trait Backend {
 
 // Components
 
-struct LayerTreeInfo {
+#[doc(hidden)]
+pub struct LayerTreeInfo {
     parent: LayerParent,
     prev_sibling: Option<LayerId>,
     next_sibling: Option<LayerId>,
 }
 
-struct LayerContainerInfo {
+#[doc(hidden)]
+pub struct LayerContainerInfo {
     first_child: Option<LayerId>,
     last_child: Option<LayerId>,
 }
 
-struct LayerGeometryInfo {
+#[doc(hidden)]
+pub struct LayerGeometryInfo {
     bounds: Rect<f32>,
 }
 
@@ -189,7 +207,12 @@ impl<B> Context<B> where B: Backend {
             self.container_component[parent].first_child = Some(new_child)
         }
 
-        self.backend.insert_before(parent, new_child, reference);
+        self.backend.insert_before(parent,
+                                   new_child,
+                                   reference,
+                                   &self.tree_component,
+                                   &self.container_component,
+                                   &self.geometry_component);
     }
 
     #[inline]
@@ -207,7 +230,11 @@ impl<B> Context<B> where B: Backend {
             next_sibling: None,
         });
 
-        self.backend.host_layer(layer, host);
+        self.backend.host_layer(layer,
+                                host,
+                                &self.tree_component,
+                                &self.container_component,
+                                &self.geometry_component);
     }
 
     pub fn remove_from_parent(&mut self, old_child: LayerId) {
@@ -256,12 +283,24 @@ impl<B> Context<B> where B: Backend {
 
     // Geometry system
 
+    pub fn layer_bounds(&self, layer: LayerId) -> Rect<f32> {
+        debug_assert!(self.in_transaction());
+
+        match self.geometry_component.get(layer) {
+            None => Rect::zero(),
+            Some(geometry) => geometry.bounds,
+        }
+    }
+
     pub fn set_layer_bounds(&mut self, layer: LayerId, new_bounds: &Rect<f32>) {
         debug_assert!(self.in_transaction());
 
         self.geometry_component.get_mut_default(layer).bounds = *new_bounds;
 
-        self.backend.set_layer_bounds(layer, new_bounds);
+        self.backend.set_layer_bounds(layer,
+                                      &self.tree_component,
+                                      &self.container_component,
+                                      &self.geometry_component);
     }
 
     // Surface system

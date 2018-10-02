@@ -33,5 +33,6 @@ path = "/Users/pcwalton/Source/core-foundation-rs/core-graphics"
 path = "/Users/pcwalton/Source/core-foundation-rs/io-surface"
 
 [dev-dependencies]
+image = "0.20"
 offscreen_gl_context = "0.21"
 winit = "0.17"
