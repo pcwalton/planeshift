@@ -68,7 +68,7 @@ pub fn main() {
     let window = Window::new(&event_loop).unwrap();
 
     // Create a `planeshift` context.
-    let mut context = Context::new();
+    let mut context = Context::new_default();
     context.begin_transaction();
 
     // Get our size.

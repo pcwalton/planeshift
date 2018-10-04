@@ -158,6 +158,22 @@ impl crate::Backend for Backend {
         core_animation_layer.set_opaque(opaque);
         core_animation_layer.set_contents_opaque(opaque);
     }
+
+    #[cfg(feature = "winit")]
+    fn host_layer_in_window(&mut self,
+                            window: &Window,
+                            layer: LayerId,
+                            tree_component: &LayerMap<LayerTreeInfo>,
+                            container_component: &LayerMap<LayerContainerInfo>,
+                            geometry_component: &LayerMap<LayerGeometryInfo>)
+                            -> Result<(), ()> {
+        self.host_layer(layer,
+                        window.get_nsview() as id,
+                        tree_component,
+                        container_component,
+                        geometry_component);
+        Ok(())
+    }
 }
 
 impl Backend {
@@ -272,6 +288,7 @@ impl Drop for NativeInfo {
         }
     }
 }
+
 // macOS surface implementation
 
 #[derive(Clone)]
@@ -308,15 +325,8 @@ impl Surface {
         self.io_surface.bind_to_gl_texture(self.size.width as i32, self.size.height as i32);
         Ok(())
     }
-}
 
-// macOS `winit` integration
-
-#[cfg(all(feature = "winit", target_os = "macos"))]
-impl Context<Backend> {
-    pub fn host_layer_in_window(&mut self, window: &Window, layer: LayerId) {
-        debug_assert!(self.in_transaction());
-
-        self.host_layer(window.get_nsview() as id, layer)
+    pub fn bind_to_gl_context(&self, (): &()) -> Result<(), ()> {
+        Err(())
     }
 }

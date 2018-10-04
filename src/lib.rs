@@ -1,23 +1,44 @@
 // planeshift/src/lib.rs
 
-extern crate cocoa;
-extern crate core_foundation;
-extern crate core_graphics;
 extern crate euclid;
 extern crate gleam;
-extern crate io_surface;
-
-#[macro_use]
-extern crate objc;
 
 #[cfg(feature = "enable-winit")]
 extern crate winit;
+
+#[cfg(any(target_os = "linux", feature = "enable-glx"))]
+extern crate x11;
+
+#[cfg(target_os = "macos")]
+extern crate cocoa;
+#[cfg(target_os = "macos")]
+extern crate core_foundation;
+#[cfg(target_os = "macos")]
+extern crate core_graphics;
+#[cfg(target_os = "macos")]
+extern crate io_surface;
+#[cfg(target_os = "macos")]
+#[macro_use]
+extern crate objc;
 
 use euclid::Rect;
 use std::mem;
 use std::ops::{Index, IndexMut};
 
+#[cfg(feature = "enable-winit")]
+use winit::Window;
+
 pub mod backends;
+
+#[cfg(any(target_os = "linux", feature = "enable-glx"))]
+mod glx {
+    include!(concat!(env!("OUT_DIR"), "/glx_bindings.rs"));
+}
+
+#[cfg(any(target_os = "linux", feature = "enable-glx"))]
+mod glx_extra {
+    include!(concat!(env!("OUT_DIR"), "/glx_extra_bindings.rs"));
+}
 
 pub struct Context<B = backends::default::Backend> where B: Backend {
     next_layer_id: LayerId,
@@ -84,6 +105,16 @@ pub trait Backend {
     fn set_layer_contents(&mut self, layer: LayerId, new_surface: &Self::Surface);
     fn refresh_layer_contents(&mut self, layer: LayerId, changed_rect: &Rect<f32>);
     fn set_contents_opaque(&mut self, layer: LayerId, opaque: bool);
+
+    // `winit` integration
+    #[cfg(feature = "winit")]
+    fn host_layer_in_window(&mut self,
+                            window: &Window,
+                            layer: LayerId,
+                            tree_component: &LayerMap<LayerTreeInfo>,
+                            container_component: &LayerMap<LayerContainerInfo>,
+                            geometry_component: &LayerMap<LayerGeometryInfo>)
+                            -> Result<(), ()>;
 }
 
 // Components
@@ -322,6 +353,26 @@ impl<B> Context<B> where B: Backend {
         debug_assert!(self.in_transaction());
 
         self.backend.set_contents_opaque(layer, opaque);
+    }
+
+    // `winit` integration
+
+    #[cfg(feature = "enable-winit")]
+    pub fn host_layer_in_window(&mut self, window: &Window, layer: LayerId) -> Result<(), ()> {
+        debug_assert!(self.in_transaction());
+
+        self.backend.host_layer_in_window(window,
+                                          layer,
+                                          &self.tree_component,
+                                          &self.container_component,
+                                          &self.geometry_component)
+    }
+}
+
+impl Context<backends::default::Backend> {
+    #[inline]
+    pub fn new_default() -> Context<backends::default::Backend> {
+        Context::new()
     }
 }
 
