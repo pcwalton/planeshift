@@ -1,7 +1,12 @@
 // planeshift/src/lib.rs
 
 extern crate euclid;
-extern crate gleam;
+extern crate gl;
+
+#[macro_use]
+extern crate bitflags;
+#[macro_use]
+extern crate lazy_static;
 
 #[cfg(feature = "enable-winit")]
 extern crate winit;
@@ -9,6 +14,8 @@ extern crate winit;
 #[cfg(any(target_os = "linux", feature = "enable-glx"))]
 extern crate x11;
 
+#[cfg(target_os = "macos")]
+extern crate cgl;
 #[cfg(target_os = "macos")]
 extern crate cocoa;
 #[cfg(target_os = "macos")]
@@ -22,6 +29,7 @@ extern crate io_surface;
 extern crate objc;
 
 use euclid::Rect;
+use gl::types::GLuint;
 use std::mem;
 use std::ops::{Index, IndexMut};
 
@@ -40,7 +48,7 @@ mod glx_extra {
     include!(concat!(env!("OUT_DIR"), "/glx_extra_bindings.rs"));
 }
 
-pub struct Context<B = backends::default::Backend> where B: Backend {
+pub struct LayerContext<B = backends::default::Backend> where B: Backend {
     next_layer_id: LayerId,
     transaction_level: u32,
 
@@ -60,11 +68,18 @@ pub struct LayerMap<T>(pub Vec<Option<T>>);
 // Backend definition
 
 pub trait Backend {
-    type Surface;
+    type Connection;
+    type GLContext;
+    type NativeGLContext;
     type Host;
 
     // Constructor
-    fn new() -> Self;
+    fn new(connection: Self::Connection) -> Self;
+
+    // OpenGL context creation
+    fn create_gl_context(&mut self, options: GLContextOptions) -> Result<Self::GLContext, ()>;
+    fn wrap_gl_context(&mut self, native_gl_context: Self::NativeGLContext)
+                       -> Result<Self::GLContext, ()>;
 
     // Transactions
     fn begin_transaction();
@@ -101,10 +116,17 @@ pub trait Backend {
                         container_component: &LayerMap<LayerContainerInfo>,
                         geometry_component: &LayerMap<LayerGeometryInfo>);
 
-    // Surface management
-    fn set_layer_contents(&mut self, layer: LayerId, new_surface: &Self::Surface);
-    fn refresh_layer_contents(&mut self, layer: LayerId, changed_rect: &Rect<f32>);
-    fn set_contents_opaque(&mut self, layer: LayerId, opaque: bool);
+    // Miscellaneous layer flags
+    fn set_layer_opaque(&mut self, layer: LayerId, opaque: bool);
+
+    // OpenGL content binding
+    fn bind_layer_to_gl_context(&mut self,
+                                layer: LayerId,
+                                context: &mut Self::GLContext,
+                                geometry_component: &LayerMap<LayerGeometryInfo>)
+                                -> Result<GLContextLayerBinding, ()>;
+    fn present_gl_context(&mut self, binding: GLContextLayerBinding, changed_rect: &Rect<f32>)
+                          -> Result<(), ()>;
 
     // `winit` integration
     #[cfg(feature = "winit")]
@@ -115,6 +137,20 @@ pub trait Backend {
                             container_component: &LayerMap<LayerContainerInfo>,
                             geometry_component: &LayerMap<LayerGeometryInfo>)
                             -> Result<(), ()>;
+}
+
+// Public structures
+
+bitflags! {
+    pub struct GLContextOptions: u8 {
+        const DEPTH = 0x01;
+        const STENCIL = 0x02;
+    }
+}
+
+pub struct GLContextLayerBinding {
+    pub layer: LayerId,
+    pub framebuffer: GLuint,
 }
 
 // Components
@@ -147,11 +183,11 @@ pub enum LayerParent {
 
 // Public API for the context
 
-impl<B> Context<B> where B: Backend {
+impl<B> LayerContext<B> where B: Backend {
     // Core functions
 
-    pub fn new() -> Context<B> {
-        Context {
+    pub fn from_backend(connection: B::Connection) -> LayerContext<B> {
+        LayerContext {
             next_layer_id: LayerId(0),
             transaction_level: 0,
 
@@ -159,9 +195,22 @@ impl<B> Context<B> where B: Backend {
             container_component: LayerMap::new(),
             geometry_component: LayerMap::new(),
 
-            backend: Backend::new(),
+            backend: Backend::new(connection),
         }
     }
+
+    // OpenGL context creation
+
+    pub fn create_gl_context(&mut self, options: GLContextOptions) -> Result<B::GLContext, ()> {
+        self.backend.create_gl_context(options)
+    }
+
+    pub fn wrap_gl_context(&mut self, native_gl_context: B::NativeGLContext)
+                           -> Result<B::GLContext, ()> {
+        self.backend.wrap_gl_context(native_gl_context)
+    }
+
+    // Transactions
 
     pub fn begin_transaction(&mut self) {
         self.transaction_level += 1;
@@ -334,25 +383,29 @@ impl<B> Context<B> where B: Backend {
                                       &self.geometry_component);
     }
 
+    // Miscellaneous layer flags
+
+    pub fn set_layer_opaque(&mut self, layer: LayerId, opaque: bool) {
+        debug_assert!(self.in_transaction());
+
+        self.backend.set_layer_opaque(layer, opaque);
+    }
+
     // Surface system
 
-    pub fn set_layer_contents(&mut self, layer: LayerId, surface: B::Surface) {
+    pub fn bind_layer_to_gl_context(&mut self, layer: LayerId, context: &mut B::GLContext)
+                                    -> Result<GLContextLayerBinding, ()> {
         debug_assert!(self.in_transaction());
         debug_assert!(!self.container_component.has(layer));
 
-        self.backend.set_layer_contents(layer, &surface);
+        self.backend.bind_layer_to_gl_context(layer, context, &self.geometry_component)
     }
 
-    pub fn refresh_layer_contents(&mut self, layer: LayerId, changed_rect: &Rect<f32>) {
+    pub fn present_gl_context(&mut self, binding: GLContextLayerBinding, changed_rect: &Rect<f32>)
+                              -> Result<(), ()> {
         debug_assert!(self.in_transaction());
 
-        self.backend.refresh_layer_contents(layer, changed_rect);
-    }
-
-    pub fn set_contents_opaque(&mut self, layer: LayerId, opaque: bool) {
-        debug_assert!(self.in_transaction());
-
-        self.backend.set_contents_opaque(layer, opaque);
+        self.backend.present_gl_context(binding, changed_rect)
     }
 
     // `winit` integration
@@ -360,6 +413,12 @@ impl<B> Context<B> where B: Backend {
     #[cfg(feature = "enable-winit")]
     pub fn host_layer_in_window(&mut self, window: &Window, layer: LayerId) -> Result<(), ()> {
         debug_assert!(self.in_transaction());
+
+        self.tree_component.add(layer, LayerTreeInfo {
+            parent: LayerParent::NativeHost,
+            prev_sibling: None,
+            next_sibling: None,
+        });
 
         self.backend.host_layer_in_window(window,
                                           layer,
@@ -369,10 +428,11 @@ impl<B> Context<B> where B: Backend {
     }
 }
 
-impl Context<backends::default::Backend> {
+impl LayerContext<backends::default::Backend> {
     #[inline]
-    pub fn new_default() -> Context<backends::default::Backend> {
-        Context::new()
+    pub fn new(connection: <backends::default::Backend as Backend>::Connection)
+               -> LayerContext<backends::default::Backend> {
+        LayerContext::from_backend(connection)
     }
 }
 

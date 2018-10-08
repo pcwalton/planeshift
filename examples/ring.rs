@@ -1,19 +1,16 @@
 // planeshift/examples/ring.rs
 
 extern crate euclid;
-extern crate gleam;
+extern crate gl;
 extern crate image;
-extern crate offscreen_gl_context as gl_context;
 extern crate planeshift;
 extern crate winit;
 
 use euclid::{Point2D, Rect, Size2D};
-use gleam::gl::{self, GLint, GLsizei, GLsizeiptr, GLuint, Gl, GlType};
-use planeshift::Context;
-use planeshift::backends::default::Surface;
-use self::gl_context::{ColorAttachmentType, GLContext, GLContextAttributes, GLVersion};
-use self::gl_context::{NativeGLContext};
+use gl::types::{GLboolean, GLchar, GLint, GLsizei, GLsizeiptr, GLuint};
+use planeshift::{GLContextOptions, LayerContext};
 use std::f32;
+use std::os::raw::c_void;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
@@ -29,12 +26,14 @@ const BACKGROUND_COLOR: [f32; 4] = [0.92, 0.91, 0.92, 1.0];
 static SPRITE_IMAGE_PATH: &'static str = "resources/examples/firefox.png";
 
 static VERTEX_SHADER_SOURCE: &'static [u8] = b"
+    #version 330
+
     uniform mat2 uTransform;
 
-    attribute vec2 aPosition;
-    attribute vec2 aTexCoord;
+    in vec2 aPosition;
+    in vec2 aTexCoord;
 
-    varying vec2 vTexCoord;
+    out vec2 vTexCoord;
 
     void main() {
         vTexCoord = aTexCoord;
@@ -43,12 +42,16 @@ static VERTEX_SHADER_SOURCE: &'static [u8] = b"
 ";
 
 static FRAGMENT_SHADER_SOURCE: &'static [u8] = b"
+    #version 330
+
     uniform sampler2D uTexture;
 
-    varying vec2 vTexCoord;
+    in vec2 vTexCoord;
+
+    out vec4 oFragColor;
 
     void main() {
-        gl_FragColor = texture2D(uTexture, vTexCoord);
+        oFragColor = texture(uTexture, vTexCoord);
     }
 ";
 
@@ -68,17 +71,16 @@ pub fn main() {
     let window = Window::new(&event_loop).unwrap();
 
     // Create a `planeshift` context.
-    let mut context = Context::new_default();
+    let mut context = LayerContext::new(());
     context.begin_transaction();
 
     // Get our size.
     let hidpi_factor = window.get_hidpi_factor();
     let window_size = window.get_inner_size().unwrap().to_physical(hidpi_factor);
-    let (window_width, window_height): (u32, u32) = window_size.into();
 
     // Create the root layer.
     let root_layer = context.add_container_layer();
-    context.host_layer_in_window(&window, root_layer);
+    context.host_layer_in_window(&window, root_layer).unwrap();
     let root_layer_size = Size2D::new(window_size.width as f32, window_size.height as f32);
     let root_layer_rect = Rect::new(Point2D::zero(), root_layer_size);
     context.set_layer_bounds(root_layer, &root_layer_rect);
@@ -87,100 +89,111 @@ pub fn main() {
     let background_layer = context.add_surface_layer();
     context.set_layer_bounds(background_layer, &root_layer_rect);
     context.append_child(root_layer, background_layer);
-
-    // Create the surface for the background layer.
-    // FIXME(pcwalton): HiDPI.
-    let background_surface = Surface::new(&Size2D::new(window_width, window_height));
-    context.set_layer_contents(background_layer, background_surface.clone());
-    context.set_contents_opaque(background_layer, true);
+    context.set_layer_opaque(background_layer, true);
 
     // Create the sprite layers.
     let mut sprite_layers = Vec::with_capacity(SPRITE_COUNT as usize);
-    let mut sprite_surfaces = Vec::with_capacity(SPRITE_COUNT as usize);
     let sprite_layer_length = ((SPRITE_SIZE as f32) * f32::consts::SQRT_2).ceil() as u32;
     let sprite_layer_size = Size2D::new(sprite_layer_length as f32, sprite_layer_length as f32);
     for _ in 0..SPRITE_COUNT {
         let sprite_layer = context.add_surface_layer();
-        let sprite_surface = Surface::new(&sprite_layer_size.ceil().to_u32());
         context.set_layer_bounds(sprite_layer,
                                  &Rect::new(Point2D::new(0.0, 0.0), sprite_layer_size));
-        context.set_layer_contents(sprite_layer, sprite_surface.clone());
         context.append_child(root_layer, sprite_layer);
-        sprite_surfaces.push(sprite_surface);
         sprite_layers.push(sprite_layer);
     }
 
-    context.end_transaction();
-
     // Create the GL context.
-    let gl_context: GLContext<NativeGLContext> = GLContext::new(Size2D::new(1, 1),
-                                                                GLContextAttributes::default(),
-                                                                ColorAttachmentType::default(),
-                                                                GlType::default(),
-                                                                GLVersion::Major(2),
-                                                                None).unwrap();
-    gl_context.make_current().unwrap();
+    let mut gl_context = context.create_gl_context(GLContextOptions::empty()).unwrap();
+    let binding = context.bind_layer_to_gl_context(background_layer, &mut gl_context).unwrap();
 
-    let gl = gl_context.gl();
-    let background_framebuffer = Framebuffer::from_surface(gl, &background_surface);
-    let sprite_framebuffers: Vec<_> = sprite_surfaces.iter().map(|surface| {
-         Framebuffer::from_surface(gl, surface)
-    }).collect();
+    let (program, transform_uniform, texture_uniform);
+    let (mut vao, mut vbo, mut sprite_texture) = (0, 0, 0);
+    unsafe {
+        // Create program.
+        program = gl::CreateProgram();
+        let vertex_shader = gl::CreateShader(gl::VERTEX_SHADER);
+        let fragment_shader = gl::CreateShader(gl::FRAGMENT_SHADER);
+        let vertex_shader_source = VERTEX_SHADER_SOURCE.as_ptr() as *const GLchar;
+        let vertex_shader_source_len = VERTEX_SHADER_SOURCE.len() as GLint;
+        let fragment_shader_source = FRAGMENT_SHADER_SOURCE.as_ptr() as *const GLchar;
+        let fragment_shader_source_len = FRAGMENT_SHADER_SOURCE.len() as GLint;
+        gl::ShaderSource(vertex_shader, 1, &vertex_shader_source, &vertex_shader_source_len);
+        gl::ShaderSource(fragment_shader, 1, &fragment_shader_source, &fragment_shader_source_len);
+        gl::CompileShader(vertex_shader);
+        gl::CompileShader(fragment_shader);
+        gl::AttachShader(program, vertex_shader);
+        gl::AttachShader(program, fragment_shader);
+        gl::LinkProgram(program);
+        gl::UseProgram(program);
 
-    // Create program.
-    let program = gl.create_program();
-    let vertex_shader = gl.create_shader(gl::VERTEX_SHADER);
-    let fragment_shader = gl.create_shader(gl::FRAGMENT_SHADER);
-    gl.shader_source(vertex_shader, &[VERTEX_SHADER_SOURCE]);
-    gl.shader_source(fragment_shader, &[FRAGMENT_SHADER_SOURCE]);
-    gl.compile_shader(vertex_shader);
-    gl.compile_shader(fragment_shader);
-    gl.attach_shader(program, vertex_shader);
-    gl.attach_shader(program, fragment_shader);
-    gl.link_program(program);
-    gl.use_program(program);
+        // Get program uniform locations.
+        transform_uniform = gl::GetUniformLocation(program,
+                                                   b"uTransform\0".as_ptr() as *const GLchar);
+        texture_uniform = gl::GetUniformLocation(program, b"uTexture\0".as_ptr() as *const GLchar);
 
-    // Get program uniform locations.
-    let transform_uniform = gl.get_uniform_location(program, "uTransform");
-    let texture_uniform = gl.get_uniform_location(program, "uTexture");
+        // Create VAO.
+        gl::GenVertexArrays(1, &mut vao);
+        gl::BindVertexArray(vao);
+        gl::UseProgram(program);
 
-    // Create VBO.
-    let vbo = gl.gen_buffers(1)[0];
-    gl.bind_buffer(gl::ARRAY_BUFFER, vbo);
-    gl.buffer_data_untyped(gl::ARRAY_BUFFER,
-                           VERTEX_DATA.len() as GLsizeiptr,
-                           VERTEX_DATA.as_ptr() as *const _,
-                           gl::STATIC_DRAW);
+        // Create VBO.
+        gl::GenBuffers(1, &mut vbo);
+        gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
+        gl::BufferData(gl::ARRAY_BUFFER,
+                            VERTEX_DATA.len() as GLsizeiptr,
+                            VERTEX_DATA.as_ptr() as *const _,
+                            gl::STATIC_DRAW);
 
-    // Create sprite texture.
-    let sprite_texture = gl.gen_textures(1)[0];
-    gl.bind_texture(gl::TEXTURE_2D, sprite_texture);
-    gl.tex_image_2d(gl::TEXTURE_2D,
-                    0,
-                    gl::RGBA as GLint,
-                    sprite_image.width() as GLsizei,
-                    sprite_image.height() as GLsizei,
-                    0,
-                    gl::RGBA,
-                    gl::UNSIGNED_BYTE,
-                    Some(&sprite_image));
-    gl.tex_parameter_i(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as GLint);
-    gl.tex_parameter_i(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as GLint);
-    gl.tex_parameter_i(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as GLint);
-    gl.tex_parameter_i(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as GLint);
+        // Set up VAO.
+        let position_attribute = gl::GetAttribLocation(program,
+                                                    b"aPosition\0".as_ptr() as *const GLchar);
+        let tex_coord_attribute = gl::GetAttribLocation(program,
+                                                        b"aTexCoord\0".as_ptr() as *const GLchar);
+        gl::VertexAttribPointer(position_attribute as GLuint,
+                                2,
+                                gl::BYTE,
+                                false as GLboolean,
+                                4,
+                                0 as *const _);
+        gl::VertexAttribPointer(tex_coord_attribute as GLuint,
+                                2,
+                                gl::BYTE,
+                                false as GLboolean,
+                                4,
+                                2 as *const _);
+        gl::EnableVertexAttribArray(position_attribute as GLuint);
+        gl::EnableVertexAttribArray(tex_coord_attribute as GLuint);
 
-    // Paint background.
-    background_framebuffer.bind(gl);
-    gl.clear_color(BACKGROUND_COLOR[0],
-                   BACKGROUND_COLOR[1],
-                   BACKGROUND_COLOR[2],
-                   BACKGROUND_COLOR[3]);
-    gl.clear(gl::COLOR_BUFFER_BIT);
-    gl.flush();
+        // Create sprite texture.
+        gl::GenTextures(1, &mut sprite_texture);
+        gl::BindTexture(gl::TEXTURE_2D, sprite_texture);
+        gl::TexImage2D(gl::TEXTURE_2D,
+                       0,
+                       gl::RGBA as GLint,
+                       sprite_image.width() as GLsizei,
+                       sprite_image.height() as GLsizei,
+                       0,
+                       gl::RGBA,
+                       gl::UNSIGNED_BYTE,
+                       sprite_image.as_ptr() as *const c_void);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as GLint);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as GLint);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as GLint);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as GLint);
 
-    // Present.
-    context.begin_transaction();
-    context.refresh_layer_contents(background_layer, &root_layer_rect);
+        // Paint background.
+        gl::Viewport(0, 0, window_size.width.round() as i32, window_size.height.round() as i32);
+        gl::ClearColor(BACKGROUND_COLOR[0],
+                       BACKGROUND_COLOR[1],
+                       BACKGROUND_COLOR[2],
+                       BACKGROUND_COLOR[3]);
+        gl::Clear(gl::COLOR_BUFFER_BIT);
+        gl::Flush();
+    }
+
+    // Present background.
+    context.present_gl_context(binding, &root_layer_rect).unwrap();
     context.end_transaction();
 
     // Spawn a thread to deliver animation messages.
@@ -219,30 +232,34 @@ pub fn main() {
         context.begin_transaction();
 
         // Paint sprites.
-        for (sprite_index, sprite_framebuffer) in sprite_framebuffers.iter().enumerate() {
+        for (sprite_index, &sprite_layer) in sprite_layers.iter().enumerate() {
+            let binding = context.bind_layer_to_gl_context(sprite_layer, &mut gl_context).unwrap();
+
             let angle = -time + (sprite_index as f32) * f32::consts::PI * 2.0 /
                 (SPRITE_COUNT as f32);
 
-            sprite_framebuffer.bind(gl);
+            unsafe {
+                gl::Viewport(0, 0, sprite_layer_length as GLint, sprite_layer_length as GLint);
+                gl::BindVertexArray(vao);
+                gl::UseProgram(program);
+                gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
+                gl::ActiveTexture(gl::TEXTURE0);
+                gl::BindTexture(gl::TEXTURE_2D, sprite_texture);
+                gl::Uniform1i(texture_uniform, 0);
+                let sprite_scale_factor = (SPRITE_SIZE as f32) / (sprite_layer_length as f32);
+                let transform_matrix = [
+                    sprite_scale_factor * angle.cos(), -sprite_scale_factor * angle.sin(),
+                    sprite_scale_factor * angle.sin(),  sprite_scale_factor * angle.cos(),
+                ];
+                gl::UniformMatrix2fv(transform_uniform,
+                                     1,
+                                     false as GLboolean,
+                                     transform_matrix.as_ptr());
+                gl::DrawArrays(gl::TRIANGLE_STRIP, 0, 4);
 
-            gl.use_program(program);
-            gl.bind_buffer(gl::ARRAY_BUFFER, vbo);
-            bind_vertex_specification(gl, program);
-            gl.active_texture(gl::TEXTURE0);
-            gl.bind_texture(gl::TEXTURE_2D, sprite_texture);
-            gl.uniform_1i(texture_uniform, 0);
-            let sprite_scale_factor = (SPRITE_SIZE as f32) / (sprite_layer_length as f32);
-            gl.uniform_matrix_2fv(transform_uniform, false, &[
-                sprite_scale_factor * angle.cos(), -sprite_scale_factor * angle.sin(),
-                sprite_scale_factor * angle.sin(),  sprite_scale_factor * angle.cos(),
-            ]);
-            gl.draw_arrays(gl::TRIANGLE_STRIP, 0, 4);
+                gl::Flush();
+            }
 
-            gl.flush();
-        }
-
-        // Update sprite positions, and present.
-        for (sprite_index, sprite_layer) in sprite_layers.iter().enumerate() {
             let angle = time + (sprite_index as f32) * f32::consts::PI * 2.0 /
                 (SPRITE_COUNT as f32);
 
@@ -250,55 +267,13 @@ pub fn main() {
                 angle.cos() * ring_radius - sprite_layer_size.width * 0.5 + center_point.x,
                 angle.sin() * ring_radius - sprite_layer_size.height * 0.5 + center_point.y);
 
-            context.set_layer_bounds(*sprite_layer,
-                                     &Rect::new(sprite_position, sprite_layer_size));
-            context.refresh_layer_contents(*sprite_layer,
-                                           &Rect::new(Point2D::zero(), sprite_layer_size));
+            context.set_layer_bounds(sprite_layer, &Rect::new(sprite_position, sprite_layer_size));
+            context.present_gl_context(binding, &Rect::new(Point2D::zero(), sprite_layer_size))
+                   .unwrap();
         }
 
         context.end_transaction();
 
         ControlFlow::Continue
     });
-}
-
-struct Framebuffer {
-    #[allow(dead_code)]
-    texture: GLuint,
-    fbo: GLuint,
-    size: Size2D<u32>,
-}
-
-impl Framebuffer {
-    fn from_surface(gl: &Gl, surface: &Surface) -> Framebuffer {
-        let size = surface.size();
-        let fbo = gl.gen_framebuffers(1)[0];
-        let texture = gl.gen_textures(1)[0];
-        surface.bind_to_gl_texture(gl, texture).unwrap();
-        gl.bind_framebuffer(gl::FRAMEBUFFER, fbo);
-        gl.framebuffer_texture_2d(gl::FRAMEBUFFER,
-                                  gl::COLOR_ATTACHMENT0,
-                                  gl::TEXTURE_RECTANGLE,
-                                  texture,
-                                  0);
-        Framebuffer {
-            size,
-            fbo,
-            texture,
-        }
-    }
-
-    fn bind(&self, gl: &Gl) {
-        gl.bind_framebuffer(gl::FRAMEBUFFER, self.fbo);
-        gl.viewport(0, 0, self.size.width as GLint, self.size.height as GLint);
-    }
-}
-
-fn bind_vertex_specification(gl: &Gl, program: GLuint) {
-    let position_attribute = gl.get_attrib_location(program, "aPosition");
-    let tex_coord_attribute = gl.get_attrib_location(program, "aTexCoord");
-    gl.vertex_attrib_pointer(position_attribute as GLuint, 2, gl::BYTE, false, 4, 0);
-    gl.vertex_attrib_pointer(tex_coord_attribute as GLuint, 2, gl::BYTE, false, 4, 2);
-    gl.enable_vertex_attrib_array(position_attribute as GLuint);
-    gl.enable_vertex_attrib_array(tex_coord_attribute as GLuint);
 }
