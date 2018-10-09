@@ -52,6 +52,13 @@ path = "/Users/pcwalton/Source/core-foundation-rs/core-graphics"
 [target.'cfg(target_os = "macos")'.dependencies.io-surface]
 path = "/Users/pcwalton/Source/core-foundation-rs/io-surface"
 
+[target.'cfg(target_family = "windows")'.dependencies]
+winapi = "0.3"
+
+[target.'cfg(target_family = "windows")'.dependencies.mozangle]
+version = "0.1"
+features = ["egl"]
+
 [dev-dependencies]
 image = "0.20"
 winit = "0.17"

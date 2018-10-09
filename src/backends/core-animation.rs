@@ -77,23 +77,25 @@ impl crate::Backend for Backend {
             }
         }
 
-        self.wrap_gl_context(cgl_context)
+        unsafe {
+            self.wrap_gl_context(cgl_context)
+        }
     }
 
-    fn wrap_gl_context(&mut self, cgl_context: CGLContextObj) -> Result<GLContext, ()> {
+    unsafe fn wrap_gl_context(&mut self, cgl_context: CGLContextObj) -> Result<GLContext, ()> {
         Ok(GLContext {
             cgl_context,
         })
     }
 
-    fn begin_transaction() {
+    fn begin_transaction(&self) {
         transaction::begin();
 
         // Disable implicit animations.
         transaction::set_disable_actions(true);
     }
 
-    fn end_transaction() {
+    fn end_transaction(&self) {
         transaction::commit();
     }
 
@@ -144,21 +146,19 @@ impl crate::Backend for Backend {
     }
 
     // Increases the reference count of `hosting_view`.
-    fn host_layer(&mut self,
-                  layer: LayerId,
-                  host: id,
-                  tree_component: &LayerMap<LayerTreeInfo>,
-                  container_component: &LayerMap<LayerContainerInfo>,
-                  geometry_component: &LayerMap<LayerGeometryInfo>) {
+    unsafe fn host_layer(&mut self,
+                         layer: LayerId,
+                         host: id,
+                         tree_component: &LayerMap<LayerTreeInfo>,
+                         container_component: &LayerMap<LayerContainerInfo>,
+                         geometry_component: &LayerMap<LayerGeometryInfo>) {
         let native_component = &mut self.native_component[layer];
         debug_assert_eq!(native_component.host, nil);
 
         let core_animation_layer = &native_component.core_animation_layer;
-        unsafe {
-            msg_send![host, retain];
-            msg_send![host, setLayer:core_animation_layer.id()];
-            msg_send![host, setWantsLayer:YES];
-        }
+        msg_send![host, retain];
+        msg_send![host, setLayer:core_animation_layer.id()];
+        msg_send![host, setWantsLayer:YES];
 
         native_component.host = host;
 
@@ -265,12 +265,14 @@ impl crate::Backend for Backend {
                             container_component: &LayerMap<LayerContainerInfo>,
                             geometry_component: &LayerMap<LayerGeometryInfo>)
                             -> Result<(), ()> {
-        self.host_layer(layer,
-                        window.get_nsview() as id,
-                        tree_component,
-                        container_component,
-                        geometry_component);
-        Ok(())
+        unsafe {
+            self.host_layer(layer,
+                            window.get_nsview() as id,
+                            tree_component,
+                            container_component,
+                            geometry_component);
+            Ok(())
+        }
     }
 }
 

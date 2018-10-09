@@ -28,6 +28,11 @@ extern crate io_surface;
 #[macro_use]
 extern crate objc;
 
+#[cfg(target_family = "windows")]
+extern crate mozangle;
+#[cfg(target_family = "windows")]
+extern crate winapi;
+
 use euclid::Rect;
 use gl::types::GLuint;
 use std::mem;
@@ -78,12 +83,12 @@ pub trait Backend {
 
     // OpenGL context creation
     fn create_gl_context(&mut self, options: GLContextOptions) -> Result<Self::GLContext, ()>;
-    fn wrap_gl_context(&mut self, native_gl_context: Self::NativeGLContext)
-                       -> Result<Self::GLContext, ()>;
+    unsafe fn wrap_gl_context(&mut self, native_gl_context: Self::NativeGLContext)
+                              -> Result<Self::GLContext, ()>;
 
     // Transactions
-    fn begin_transaction();
-    fn end_transaction();
+    fn begin_transaction(&self);
+    fn end_transaction(&self);
 
     // Layer creation and destruction
     fn add_container_layer(&mut self, new_layer: LayerId);
@@ -101,12 +106,12 @@ pub trait Backend {
     fn remove_from_superlayer(&mut self, layer: LayerId);
 
     // Native hosting
-    fn host_layer(&mut self,
-                  layer: LayerId,
-                  host: Self::Host,
-                  tree_component: &LayerMap<LayerTreeInfo>,
-                  container_component: &LayerMap<LayerContainerInfo>,
-                  geometry_component: &LayerMap<LayerGeometryInfo>);
+    unsafe fn host_layer(&mut self,
+                         layer: LayerId,
+                         host: Self::Host,
+                         tree_component: &LayerMap<LayerTreeInfo>,
+                         container_component: &LayerMap<LayerContainerInfo>,
+                         geometry_component: &LayerMap<LayerGeometryInfo>);
     fn unhost_layer(&mut self, layer: LayerId);
 
     // Geometry
@@ -209,8 +214,8 @@ impl<B> LayerContext<B> where B: Backend {
         self.backend.create_gl_context(options)
     }
 
-    pub fn wrap_gl_context(&mut self, native_gl_context: B::NativeGLContext)
-                           -> Result<B::GLContext, ()> {
+    pub unsafe fn wrap_gl_context(&mut self, native_gl_context: B::NativeGLContext)
+                                  -> Result<B::GLContext, ()> {
         self.backend.wrap_gl_context(native_gl_context)
     }
 
@@ -220,7 +225,7 @@ impl<B> LayerContext<B> where B: Backend {
         self.transaction_level += 1;
 
         if self.transaction_level == 1 {
-            B::begin_transaction();
+            self.backend.begin_transaction();
         }
     }
 
@@ -228,7 +233,7 @@ impl<B> LayerContext<B> where B: Backend {
         self.transaction_level -= 1;
 
         if self.transaction_level == 0 {
-            B::end_transaction();
+            self.backend.end_transaction();
         }
     }
 
@@ -305,7 +310,7 @@ impl<B> LayerContext<B> where B: Backend {
     }
 
     #[inline]
-    pub fn host_layer(&mut self, host: B::Host, layer: LayerId) {
+    pub unsafe fn host_layer(&mut self, host: B::Host, layer: LayerId) {
         debug_assert!(self.in_transaction());
 
         self.tree_component.add(layer, LayerTreeInfo {

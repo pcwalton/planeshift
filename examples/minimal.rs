@@ -8,7 +8,7 @@ extern crate winit;
 use euclid::{Point2D, Rect, Size2D};
 use gl::types::GLint;
 use planeshift::{GLContextOptions, LayerContext};
-use winit::{ControlFlow, Event, EventsLoop, Window, WindowBuilder, WindowEvent};
+use winit::{ControlFlow, Event, EventsLoop, WindowBuilder, WindowEvent};
 
 pub fn main() {
     let mut event_loop = EventsLoop::new();
