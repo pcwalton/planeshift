@@ -71,7 +71,7 @@ pub fn main() {
     let window = Window::new(&event_loop).unwrap();
 
     // Create a `planeshift` context.
-    let mut context = LayerContext::new(());
+    let mut context = LayerContext::from_window(&window);
     context.begin_transaction();
 
     // Get our size.
@@ -240,6 +240,9 @@ pub fn main() {
 
             unsafe {
                 gl::Viewport(0, 0, sprite_layer_length as GLint, sprite_layer_length as GLint);
+                gl::ClearColor(0.0, 0.0, 0.0, 0.0);
+                gl::Clear(gl::COLOR_BUFFER_BIT);
+
                 gl::BindVertexArray(vao);
                 gl::UseProgram(program);
                 gl::BindBuffer(gl::ARRAY_BUFFER, vbo);

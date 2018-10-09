@@ -3,15 +3,22 @@
 //! GLX/Xlib/X11-based native system implementation.
 
 use euclid::{Point2D, Rect, Size2D};
-use gleam::gl::{GLuint, Gl};
+use gl::types::{GLint, GLuint};
+use std::ffi::CString;
 use std::mem;
 use std::ptr;
+use std::slice;
 use std::sync::{Arc, Mutex};
 use x11::xlib::{self, Display, Visual, Window, XSetWindowAttributes};
 
+use crate::glx::types::Display as GLXDisplay;
 use crate::glx::types::GLXContext;
 use crate::glx;
-use crate::{Context, LayerContainerInfo, LayerGeometryInfo, LayerId, LayerMap, LayerTreeInfo};
+use crate::glx_extra::Glx as GlxExtra;
+use crate::glx_extra::types::Display as GLXExtraDisplay;
+use crate::glx_extra;
+use crate::{GLContextLayerBinding, GLContextOptions, LayerContainerInfo, LayerContext};
+use crate::{LayerGeometryInfo, LayerId, LayerMap, LayerTreeInfo};
 
 #[cfg(all(feature = "enable-winit"))]
 use winit;
@@ -22,30 +29,108 @@ pub struct Backend {
     native_component: LayerMap<NativeInfo>,
 
     display: *mut Display,
+    screen: i32,
     visual: *mut Visual,
     depth: i32,
     root_window: Window,
+
+    glx_extra: GlxExtra,
 }
 
 impl crate::Backend for Backend {
-    type Surface = Surface;
+    type Connection = *mut Display;
+    type GLContext = GLContext;
+    type NativeGLContext = GLXContext;
     type Host = Window;
 
-    fn new() -> Backend {
+    fn new(display: *mut Display) -> Backend {
         unsafe {
-            let display = xlib::XOpenDisplay(ptr::null_mut());
             let screen = xlib::XDefaultScreen(display);
-            let visual = xlib::XDefaultVisual(display, screen);
-            let depth = xlib::XDefaultDepth(display, screen);
             let root_window = xlib::XRootWindow(display, screen);
+
+            let mut visual_info = mem::uninitialized();
+            xlib::XMatchVisualInfo(display, screen, 32, xlib::TrueColor, &mut visual_info);
+            let (visual, depth) = (visual_info.visual, visual_info.depth);
+
+            gl::load_with(|symbol| {
+                let symbol = CString::new(symbol.as_bytes()).unwrap();
+                glx::GetProcAddress(symbol.as_ptr() as *const u8) as *const _
+            });
+
+            let glx_extra = GlxExtra::load_with(|symbol| {
+                let symbol = CString::new(symbol.as_bytes()).unwrap();
+                glx::GetProcAddress(symbol.as_ptr() as *const u8) as *const _
+            });
+
             Backend {
                 native_component: LayerMap::new(),
                 display,
+                screen,
                 visual,
                 depth,
                 root_window,
+                glx_extra,
             }
         }
+    }
+
+    fn create_gl_context(&mut self, options: GLContextOptions) -> Result<GLContext, ()> {
+        unsafe {
+            let attributes = [
+                glx::DRAWABLE_TYPE, glx::WINDOW_BIT,
+                glx::DOUBLEBUFFER, xlib::True as GLuint,
+                glx::X_RENDERABLE, xlib::True as GLuint,
+                glx::RED_SIZE, 8,
+                glx::GREEN_SIZE, 8,
+                glx::BLUE_SIZE, 8,
+                glx::ALPHA_SIZE, 8,
+                glx::DEPTH_SIZE, if options.contains(GLContextOptions::DEPTH) { 16 } else { 0 },
+                glx::STENCIL_SIZE, if options.contains(GLContextOptions::STENCIL) { 8 } else { 0 },
+                0, 0,
+            ];
+            let mut configs_count = 0;
+            let configs = glx::ChooseFBConfig(self.display as *mut GLXDisplay,
+                                              self.screen,
+                                              attributes.as_ptr() as *const GLint,
+                                              &mut configs_count);
+            if configs.is_null() {
+                return Err(())
+            }
+
+            let configs = slice::from_raw_parts(configs, configs_count as usize);
+            let (_config_index, &config) = configs.iter().enumerate().filter(|(_, &config)| {
+                let visual_info = glx::GetVisualFromFBConfig(self.display as *mut GLXDisplay,
+                                                             config);
+                (*visual_info).depth == self.depth
+            }).next().unwrap();
+
+            let attributes = [
+                glx_extra::CONTEXT_MAJOR_VERSION_ARB, 3,
+                glx_extra::CONTEXT_MINOR_VERSION_ARB, 2,
+                0, 0,
+            ];
+            let glx_context = self.glx_extra
+                                  .CreateContextAttribsARB(self.display as *mut GLXExtraDisplay,
+                                                           config,
+                                                           ptr::null_mut(),
+                                                           xlib::True,
+                                                           attributes.as_ptr() as *const GLint);
+            if glx_context.is_null() {
+                return Err(())
+            }
+
+            Ok(GLContext {
+                glx_context,
+                display: self.display,
+            })
+        }
+    }
+
+    fn wrap_gl_context(&mut self, glx_context: GLXContext) -> Result<GLContext, ()> {
+        Ok(GLContext {
+            glx_context,
+            display: self.display,
+        })
     }
 
     fn begin_transaction() {
@@ -59,6 +144,14 @@ impl crate::Backend for Backend {
     fn add_container_layer(&mut self, new_layer: LayerId) {
         unsafe {
             let mut attributes: XSetWindowAttributes = mem::uninitialized();
+            attributes.colormap = xlib::XCreateColormap(self.display,
+                                                        self.root_window,
+                                                        self.visual,
+                                                        xlib::AllocNone);
+            attributes.border_pixel = 0;
+            attributes.background_pixel = 0;
+            let attributes_bits = xlib::CWColormap | xlib::CWBorderPixel | xlib::CWBackPixel;
+
             let window = xlib::XCreateWindow(self.display,
                                              self.root_window,
                                              0, 0,
@@ -67,8 +160,11 @@ impl crate::Backend for Backend {
                                              self.depth,
                                              xlib::InputOutput as u32,
                                              self.visual,
-                                             0,
+                                             attributes_bits,
                                              &mut attributes);
+
+            xlib::XCreateGC(self.display, window, 0, ptr::null_mut());
+
             self.native_component.add(new_layer, NativeInfo {
                 window,
             });
@@ -176,23 +272,40 @@ impl crate::Backend for Backend {
         }
     }
 
-    fn set_layer_contents(&mut self, layer: LayerId, surface: &Self::Surface) {
-        let window = self.native_component[layer].window;
-        *surface.data.lock().unwrap() = Some(SurfaceData {
-            display: self.display,
-            window,
-        });
-    }
+    fn set_layer_opaque(&mut self, _: LayerId, _: bool) {}
 
-    fn refresh_layer_contents(&mut self, layer: LayerId, _: &Rect<f32>) {
+    fn bind_layer_to_gl_context(&mut self,
+                                layer: LayerId,
+                                context: &mut GLContext,
+                                _: &LayerMap<LayerGeometryInfo>)
+                                -> Result<GLContextLayerBinding, ()> {
         unsafe {
-            glx::SwapBuffers(self.display as *mut _, self.native_component[layer].window);
+            let window = self.native_component[layer].window;
+            glx::MakeCurrent(context.display as *mut _, window, context.glx_context);
+
+            Ok(GLContextLayerBinding {
+                layer,
+                framebuffer: 0,
+            })
         }
     }
 
-    fn set_contents_opaque(&mut self, _: LayerId, _: bool) {}
+    fn present_gl_context(&mut self, binding: GLContextLayerBinding, _: &Rect<f32>)
+                          -> Result<(), ()> {
+        unsafe {
+            gl::Flush();
+            glx::SwapBuffers(self.display as *mut _, self.native_component[binding.layer].window);
+        }
 
-    #[cfg(feature = "winit")]
+        Ok(())
+    }
+
+    #[cfg(feature = "enable-winit")]
+    fn connection_from_window(window: &winit::Window) -> *mut Display {
+        window.get_xlib_display().unwrap() as *mut Display
+    }
+
+    #[cfg(feature = "enable-winit")]
     fn host_layer_in_window(&mut self,
                             window: &winit::Window,
                             layer: LayerId,
@@ -220,45 +333,18 @@ struct NativeInfo {
     window: Window,
 }
 
-// GLX surface implementation
+// GLX context implementation
 
-#[derive(Clone)]
-pub struct Surface {
-    data: Arc<Mutex<Option<SurfaceData>>>,
-    size: Size2D<u32>,
-}
-
-impl Surface {
-    pub fn new(size: &Size2D<u32>) -> Surface {
-        Surface {
-            data: Arc::new(Mutex::new(None)),
-            size: *size,
-        }
-    }
-
-    #[inline]
-    pub fn size(&self) -> Size2D<u32> {
-        self.size
-    }
-
-    pub fn bind_to_gl_texture(&self, _: &Gl, _: GLuint) -> Result<(), ()> {
-        Err(())
-    }
-
-    pub fn bind_to_gl_context(&self, context: &GLXContext) -> Result<(), ()> {
-        match *self.data.lock().unwrap() {
-            None => Err(()),
-            Some(ref data) => {
-                unsafe {
-                    glx::MakeCurrent(data.display as *mut _, data.window, *context);
-                    Ok(())
-                }
-            }
-        }
-    }
-}
-
-pub struct SurfaceData {
+pub struct GLContext {
+    glx_context: GLXContext,
     display: *mut Display,
-    window: Window,
+}
+
+impl Drop for GLContext {
+    #[inline]
+    fn drop(&mut self) {
+        unsafe {
+            glx::DestroyContext(self.display as *mut GLXDisplay, self.glx_context);
+        }
+    }
 }
