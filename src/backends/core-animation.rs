@@ -254,7 +254,10 @@ impl crate::Backend for Backend {
 
     // `winit` integration
 
-    #[cfg(feature = "winit")]
+    #[cfg(feature = "enable-winit")]
+    fn connection_from_window(_: &winit::Window) {}
+
+    #[cfg(feature = "enable-winit")]
     fn host_layer_in_window(&mut self,
                             window: &Window,
                             layer: LayerId,
