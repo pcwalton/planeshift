@@ -103,7 +103,7 @@ pub trait Backend {
                      tree_component: &LayerMap<LayerTreeInfo>,
                      container_component: &LayerMap<LayerContainerInfo>,
                      geometry_component: &LayerMap<LayerGeometryInfo>);
-    fn remove_from_superlayer(&mut self, layer: LayerId);
+    fn remove_from_superlayer(&mut self, layer: LayerId, parent: LayerId);
 
     // Native hosting
     unsafe fn host_layer(&mut self,
@@ -334,6 +334,8 @@ impl<B> LayerContext<B> where B: Backend {
             LayerParent::NativeHost => self.backend.unhost_layer(old_child),
 
             LayerParent::Layer(parent_layer) => {
+                self.backend.remove_from_superlayer(old_child, parent_layer);
+
                 match old_tree.prev_sibling {
                     None => {
                         self.container_component[parent_layer].first_child = old_tree.next_sibling
@@ -350,8 +352,6 @@ impl<B> LayerContext<B> where B: Backend {
                         self.tree_component[next_sibling].prev_sibling = old_tree.prev_sibling
                     }
                 }
-
-                self.backend.remove_from_superlayer(old_child);
             }
         }
     }

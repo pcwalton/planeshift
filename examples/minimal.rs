@@ -22,8 +22,9 @@ pub fn main() {
     let layer = context.add_surface_layer();
     context.host_layer_in_window(&window, layer).unwrap();
 
-    // FIXME(pcwalton): HiDPI.
-    let window_size = window.get_inner_size().unwrap();
+    // Get our size.
+    let hidpi_factor = window.get_hidpi_factor();
+    let window_size = window.get_inner_size().unwrap().to_physical(hidpi_factor);
     let (width, height): (u32, u32) = window_size.into();
 
     let layer_size = Size2D::new(window_size.width as f32, window_size.height as f32);
