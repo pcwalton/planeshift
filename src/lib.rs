@@ -11,8 +11,11 @@ extern crate lazy_static;
 #[cfg(feature = "enable-winit")]
 extern crate winit;
 
-#[cfg(any(target_os = "linux", feature = "enable-glx"))]
+#[cfg(feature = "enable-glx")]
 extern crate x11;
+
+#[cfg(target_os = "linux")]
+extern crate wayland_client;
 
 #[cfg(target_os = "macos")]
 extern crate cgl;

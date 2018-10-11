@@ -1,5 +1,7 @@
 // planeshift/src/backends/core-animation.rs
 
+//! Core Animation native system implementation.
+
 use cgl::{CGLChoosePixelFormat, CGLContextObj, CGLCreateContext, CGLPixelFormatAttribute};
 use cgl::{CGLSetCurrentContext, kCGLNoError, kCGLPFAOpenGLProfile};
 use cocoa::base::{NO, YES, id, nil};
@@ -35,8 +37,6 @@ static OPENGL_FRAMEWORK_IDENTIFIER: &'static str = "com.apple.opengl";
 lazy_static! {
     static ref CREATE_CONTEXT_MUTEX: Mutex<()> = Mutex::new(());
 }
-
-// Core Animation native system implementation
 
 pub struct Backend {
     native_component: LayerMap<NativeInfo>,
