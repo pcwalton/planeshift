@@ -10,8 +10,8 @@ use euclid::Rect;
 #[cfg(feature = "enable-winit")]
 use winit::Window;
 
-use crate::{GLContextLayerBinding, GLContextOptions, LayerId, LayerMap, LayerContainerInfo};
-use crate::{LayerGeometryInfo, LayerTreeInfo};
+use crate::{GLAPI, GLContextLayerBinding, LayerId, LayerMap, LayerContainerInfo};
+use crate::{LayerGeometryInfo, LayerSurfaceInfo, LayerTreeInfo, SurfaceOptions};
 
 pub enum Backend<A, B> where A: crate::Backend, B: crate::Backend {
     A(A),
@@ -33,7 +33,7 @@ impl<A, B> crate::Backend for Backend<A, B> where A: crate::Backend, B: crate::B
     }
 
     // OpenGL context creation
-    fn create_gl_context(&mut self, options: GLContextOptions) -> Result<Self::GLContext, ()> {
+    fn create_gl_context(&mut self, options: SurfaceOptions) -> Result<Self::GLContext, ()> {
         match *self {
             Backend::A(ref mut this) => Ok(GLContext::A(this.create_gl_context(options)?)),
             Backend::B(ref mut this) => Ok(GLContext::B(this.create_gl_context(options)?)),
@@ -66,6 +66,13 @@ impl<A, B> crate::Backend for Backend<A, B> where A: crate::Backend, B: crate::B
         }
     }
 
+    fn gl_api(&self) -> GLAPI {
+        match *self {
+            Backend::A(ref this) => this.gl_api(),
+            Backend::B(ref this) => this.gl_api(),
+        }
+    }
+
     // Transactions
 
     fn begin_transaction(&self) {
@@ -75,10 +82,10 @@ impl<A, B> crate::Backend for Backend<A, B> where A: crate::Backend, B: crate::B
         }
     }
 
-    fn end_transaction(&self) {
+    fn end_transaction(&mut self, tree_component: &LayerMap<LayerTreeInfo>) {
         match *self {
-            Backend::A(ref this) => this.end_transaction(),
-            Backend::B(ref this) => this.end_transaction(),
+            Backend::A(ref mut this) => this.end_transaction(tree_component),
+            Backend::B(ref mut this) => this.end_transaction(tree_component),
         }
     }
 
@@ -209,10 +216,12 @@ impl<A, B> crate::Backend for Backend<A, B> where A: crate::Backend, B: crate::B
 
     // Miscellaneous layer flags
 
-    fn set_layer_opaque(&mut self, layer: LayerId, opaque: bool) {
+    fn set_layer_surface_options(&mut self,
+                                 layer: LayerId,
+                                 surface_component: &LayerMap<LayerSurfaceInfo>) {
         match *self {
-            Backend::A(ref mut this) => this.set_layer_opaque(layer, opaque),
-            Backend::B(ref mut this) => this.set_layer_opaque(layer, opaque),
+            Backend::A(ref mut this) => this.set_layer_surface_options(layer, surface_component),
+            Backend::B(ref mut this) => this.set_layer_surface_options(layer, surface_component),
         }
     }
 

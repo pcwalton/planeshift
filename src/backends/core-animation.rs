@@ -1,5 +1,7 @@
 // planeshift/src/backends/core-animation.rs
 
+//! Core Animation native system implementation.
+
 use cgl::{CGLChoosePixelFormat, CGLContextObj, CGLCreateContext, CGLPixelFormatAttribute};
 use cgl::{CGLSetCurrentContext, kCGLNoError, kCGLPFAOpenGLProfile};
 use cocoa::base::{NO, YES, id, nil};
@@ -24,8 +26,8 @@ use winit::Window;
 #[cfg(all(feature = "enable-winit", target_os = "macos"))]
 use winit::os::macos::WindowExt;
 
-use crate::{GLContextLayerBinding, GLContextOptions, LayerContainerInfo, LayerGeometryInfo};
-use crate::{LayerId, LayerMap, LayerParent, LayerTreeInfo};
+use crate::{GLAPI, GLContextLayerBinding, LayerContainerInfo, LayerGeometryInfo, LayerId};
+use crate::{LayerMap, LayerParent, LayerSurfaceInfo, LayerTreeInfo, SurfaceOptions};
 
 #[allow(non_upper_case_globals)]
 const kCGLOGLPVersion_3_2_Core: CGLPixelFormatAttribute = 0x3200;
@@ -35,8 +37,6 @@ static OPENGL_FRAMEWORK_IDENTIFIER: &'static str = "com.apple.opengl";
 lazy_static! {
     static ref CREATE_CONTEXT_MUTEX: Mutex<()> = Mutex::new(());
 }
-
-// Core Animation native system implementation
 
 pub struct Backend {
     native_component: LayerMap<NativeInfo>,
@@ -59,7 +59,7 @@ impl crate::Backend for Backend {
     }
 
     // TODO(pcwalton): Options.
-    fn create_gl_context(&mut self, _: GLContextOptions) -> Result<GLContext, ()> {
+    fn create_gl_context(&mut self, _: SurfaceOptions) -> Result<GLContext, ()> {
         // Multiple threads can't open a display connection simultaneously, so take a lock here.
         let _lock = CREATE_CONTEXT_MUTEX.lock().unwrap();
         let mut attributes = [kCGLPFAOpenGLProfile, kCGLOGLPVersion_3_2_Core, 0, 0];
@@ -88,6 +88,11 @@ impl crate::Backend for Backend {
         })
     }
 
+    #[inline]
+    fn gl_api(&self) -> GLAPI {
+        GLAPI::GL
+    }
+
     fn begin_transaction(&self) {
         transaction::begin();
 
@@ -95,7 +100,7 @@ impl crate::Backend for Backend {
         transaction::set_disable_actions(true);
     }
 
-    fn end_transaction(&self) {
+    fn end_transaction(&mut self, _: &LayerMap<LayerTreeInfo>) {
         transaction::commit();
     }
 
@@ -189,8 +194,13 @@ impl crate::Backend for Backend {
         self.update_layer_bounds(layer, tree_component, geometry_component);
     }
 
-    fn set_layer_opaque(&mut self, layer: LayerId, opaque: bool) {
+    fn set_layer_surface_options(&mut self,
+                                 layer: LayerId,
+                                 surface_component: &LayerMap<LayerSurfaceInfo>) {
+        let surface_options = surface_component[layer].options;
+
         let core_animation_layer = &mut self.native_component[layer].core_animation_layer;
+        let opaque = surface_options.contains(SurfaceOptions::OPAQUE);
         core_animation_layer.set_opaque(opaque);
         core_animation_layer.set_contents_opaque(opaque);
     }

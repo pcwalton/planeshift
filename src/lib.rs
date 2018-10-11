@@ -2,6 +2,7 @@
 
 extern crate euclid;
 extern crate gl;
+extern crate tempfile;
 
 #[macro_use]
 extern crate bitflags;
@@ -11,8 +12,14 @@ extern crate lazy_static;
 #[cfg(feature = "enable-winit")]
 extern crate winit;
 
-#[cfg(any(target_os = "linux", feature = "enable-glx"))]
+#[cfg(feature = "enable-glx")]
 extern crate x11;
+
+#[cfg(target_os = "linux")]
+extern crate wayland_client;
+#[cfg(target_os = "linux")]
+#[macro_use]
+extern crate wayland_sys;
 
 #[cfg(target_os = "macos")]
 extern crate cgl;
@@ -43,12 +50,34 @@ use winit::Window;
 
 pub mod backends;
 
-#[cfg(any(target_os = "linux", feature = "enable-glx"))]
+#[cfg(target_os = "linux")]
+#[allow(non_camel_case_types)]
+mod egl {
+    use std::os::raw::{c_long, c_void};
+    use wayland_sys::client::wl_display;
+    use wayland_sys::egl::wl_egl_window;
+
+    pub type EGLNativeDisplayType = *mut wl_display;
+    pub type EGLNativePixmapType = *mut c_void;
+    pub type EGLNativeWindowType = *mut wl_egl_window;
+    pub type EGLint = khronos_int32_t;
+    pub type NativeDisplayType = EGLNativeDisplayType;
+    pub type NativePixmapType = EGLNativePixmapType;
+    pub type NativeWindowType = EGLNativeWindowType;
+    pub type khronos_int32_t = i32;
+    pub type khronos_ssize_t = c_long;
+    pub type khronos_uint64_t = u64;
+    pub type khronos_utime_nanoseconds_t = khronos_uint64_t;
+
+    include!(concat!(env!("OUT_DIR"), "/egl_bindings.rs"));
+}
+
+#[cfg(target_os = "linux")]
 mod glx {
     include!(concat!(env!("OUT_DIR"), "/glx_bindings.rs"));
 }
 
-#[cfg(any(target_os = "linux", feature = "enable-glx"))]
+#[cfg(target_os = "linux")]
 mod glx_extra {
     include!(concat!(env!("OUT_DIR"), "/glx_extra_bindings.rs"));
 }
@@ -60,11 +89,12 @@ pub struct LayerContext<B = backends::default::Backend> where B: Backend {
     tree_component: LayerMap<LayerTreeInfo>,
     container_component: LayerMap<LayerContainerInfo>,
     geometry_component: LayerMap<LayerGeometryInfo>,
+    surface_component: LayerMap<LayerSurfaceInfo>,
 
     backend: B,
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Hash, Debug)]
 pub struct LayerId(pub u32);
 
 #[derive(Debug)]
@@ -82,13 +112,15 @@ pub trait Backend {
     fn new(connection: Self::Connection) -> Self;
 
     // OpenGL context creation
-    fn create_gl_context(&mut self, options: GLContextOptions) -> Result<Self::GLContext, ()>;
+    fn create_gl_context(&mut self, surface_options: SurfaceOptions)
+                         -> Result<Self::GLContext, ()>;
     unsafe fn wrap_gl_context(&mut self, native_gl_context: Self::NativeGLContext)
                               -> Result<Self::GLContext, ()>;
+    fn gl_api(&self) -> GLAPI;
 
     // Transactions
     fn begin_transaction(&self);
-    fn end_transaction(&self);
+    fn end_transaction(&mut self, tree_component: &LayerMap<LayerTreeInfo>);
 
     // Layer creation and destruction
     fn add_container_layer(&mut self, new_layer: LayerId);
@@ -122,7 +154,9 @@ pub trait Backend {
                         geometry_component: &LayerMap<LayerGeometryInfo>);
 
     // Miscellaneous layer flags
-    fn set_layer_opaque(&mut self, layer: LayerId, opaque: bool);
+    fn set_layer_surface_options(&mut self,
+                                 layer: LayerId,
+                                 surface_component: &LayerMap<LayerSurfaceInfo>);
 
     // OpenGL content binding
     fn bind_layer_to_gl_context(&mut self,
@@ -151,15 +185,22 @@ pub trait Backend {
 // Public structures
 
 bitflags! {
-    pub struct GLContextOptions: u8 {
-        const DEPTH = 0x01;
-        const STENCIL = 0x02;
+    pub struct SurfaceOptions: u8 {
+        const OPAQUE = 0x01;
+        const DEPTH = 0x02;
+        const STENCIL = 0x04;
     }
 }
 
 pub struct GLContextLayerBinding {
     pub layer: LayerId,
     pub framebuffer: GLuint,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GLAPI {
+    GL,
+    GLES,
 }
 
 // Components
@@ -180,6 +221,11 @@ pub struct LayerContainerInfo {
 #[doc(hidden)]
 pub struct LayerGeometryInfo {
     bounds: Rect<f32>,
+}
+
+#[doc(hidden)]
+pub struct LayerSurfaceInfo {
+    options: SurfaceOptions,
 }
 
 // Other data structures
@@ -203,6 +249,7 @@ impl<B> LayerContext<B> where B: Backend {
             tree_component: LayerMap::new(),
             container_component: LayerMap::new(),
             geometry_component: LayerMap::new(),
+            surface_component: LayerMap::new(),
 
             backend: Backend::new(connection),
         }
@@ -210,13 +257,17 @@ impl<B> LayerContext<B> where B: Backend {
 
     // OpenGL context creation
 
-    pub fn create_gl_context(&mut self, options: GLContextOptions) -> Result<B::GLContext, ()> {
+    pub fn create_gl_context(&mut self, options: SurfaceOptions) -> Result<B::GLContext, ()> {
         self.backend.create_gl_context(options)
     }
 
     pub unsafe fn wrap_gl_context(&mut self, native_gl_context: B::NativeGLContext)
                                   -> Result<B::GLContext, ()> {
         self.backend.wrap_gl_context(native_gl_context)
+    }
+
+    pub fn gl_api(&self) -> GLAPI {
+        self.backend.gl_api()
     }
 
     // Transactions
@@ -233,7 +284,7 @@ impl<B> LayerContext<B> where B: Backend {
         self.transaction_level -= 1;
 
         if self.transaction_level == 0 {
-            self.backend.end_transaction();
+            self.backend.end_transaction(&self.tree_component);
         }
     }
 
@@ -262,6 +313,10 @@ impl<B> LayerContext<B> where B: Backend {
 
         let layer = self.next_layer_id;
         self.next_layer_id.0 += 1;
+
+        self.surface_component.add(layer, LayerSurfaceInfo {
+            options: SurfaceOptions::empty(),
+        });
 
         self.backend.add_surface_layer(layer);
         layer
@@ -394,10 +449,11 @@ impl<B> LayerContext<B> where B: Backend {
 
     // Miscellaneous layer flags
 
-    pub fn set_layer_opaque(&mut self, layer: LayerId, opaque: bool) {
+    pub fn set_layer_surface_options(&mut self, layer: LayerId, surface_options: SurfaceOptions) {
         debug_assert!(self.in_transaction());
 
-        self.backend.set_layer_opaque(layer, opaque);
+        self.surface_component[layer].options = surface_options;
+        self.backend.set_layer_surface_options(layer, &self.surface_component);
     }
 
     // Surface system

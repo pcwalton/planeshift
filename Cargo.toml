@@ -22,6 +22,7 @@ bitflags = "1.0"
 euclid = "0.19"
 gl = "0.6"
 lazy_static = "1.1"
+tempfile = "3.0"
 
 [dependencies.winit]
 version = "0.17"
@@ -31,6 +32,14 @@ optional = true
 version = "2.18"
 features = ["xlib"]
 optional = true
+
+[target.'cfg(target_os = "linux")'.dependencies.wayland-client]
+version = "0.20"
+features = ["egl", "native_lib"]
+
+[target.'cfg(target_os = "linux")'.dependencies.wayland-sys]
+version = "0.20"
+features = ["client", "egl"]
 
 [target.'cfg(target_os = "linux")'.dependencies.x11]
 version = "2.18"

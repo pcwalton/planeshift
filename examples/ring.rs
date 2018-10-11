@@ -8,7 +8,7 @@ extern crate winit;
 
 use euclid::{Point2D, Rect, Size2D};
 use gl::types::{GLboolean, GLchar, GLint, GLsizei, GLsizeiptr, GLuint};
-use planeshift::{GLContextOptions, LayerContext};
+use planeshift::{GLAPI, LayerContext, SurfaceOptions};
 use std::f32;
 use std::os::raw::c_void;
 use std::sync::Arc;
@@ -25,7 +25,8 @@ const BACKGROUND_COLOR: [f32; 4] = [0.92, 0.91, 0.92, 1.0];
 
 static SPRITE_IMAGE_PATH: &'static str = "resources/examples/firefox.png";
 
-static VERTEX_SHADER_SOURCE: &'static [u8] = b"#version 330
+static VERTEX_SHADER_SOURCE: &'static [u8] = b"
+    precision highp float;
 
     uniform mat2 uTransform;
 
@@ -40,7 +41,8 @@ static VERTEX_SHADER_SOURCE: &'static [u8] = b"#version 330
     }
 ";
 
-static FRAGMENT_SHADER_SOURCE: &'static [u8] = b"#version 330
+static FRAGMENT_SHADER_SOURCE: &'static [u8] = b"
+    precision highp float;
 
     uniform sampler2D uTexture;
 
@@ -87,7 +89,7 @@ pub fn main() {
     let background_layer = context.add_surface_layer();
     context.set_layer_bounds(background_layer, &root_layer_rect);
     context.append_child(root_layer, background_layer);
-    context.set_layer_opaque(background_layer, true);
+    context.set_layer_surface_options(background_layer, SurfaceOptions::OPAQUE);
 
     // Create the sprite layers.
     let mut sprite_layers = Vec::with_capacity(SPRITE_COUNT as usize);
@@ -102,24 +104,17 @@ pub fn main() {
     }
 
     // Create the GL context.
-    let mut gl_context = context.create_gl_context(GLContextOptions::empty()).unwrap();
+    let mut gl_context = context.create_gl_context(SurfaceOptions::OPAQUE).unwrap();
     let binding = context.bind_layer_to_gl_context(background_layer, &mut gl_context).unwrap();
+    let gl_api = context.gl_api();
 
     let (program, transform_uniform, texture_uniform);
     let (mut vao, mut vbo, mut sprite_texture) = (0, 0, 0);
     unsafe {
         // Create program.
         program = gl::CreateProgram();
-        let vertex_shader = gl::CreateShader(gl::VERTEX_SHADER);
-        let fragment_shader = gl::CreateShader(gl::FRAGMENT_SHADER);
-        let vertex_shader_source = VERTEX_SHADER_SOURCE.as_ptr() as *const GLchar;
-        let vertex_shader_source_len = VERTEX_SHADER_SOURCE.len() as GLint;
-        let fragment_shader_source = FRAGMENT_SHADER_SOURCE.as_ptr() as *const GLchar;
-        let fragment_shader_source_len = FRAGMENT_SHADER_SOURCE.len() as GLint;
-        gl::ShaderSource(vertex_shader, 1, &vertex_shader_source, &vertex_shader_source_len);
-        gl::ShaderSource(fragment_shader, 1, &fragment_shader_source, &fragment_shader_source_len);
-        gl::CompileShader(vertex_shader);
-        gl::CompileShader(fragment_shader);
+        let vertex_shader = compile_shader(gl::VERTEX_SHADER, VERTEX_SHADER_SOURCE, gl_api);
+        let fragment_shader = compile_shader(gl::FRAGMENT_SHADER, FRAGMENT_SHADER_SOURCE, gl_api);
         gl::AttachShader(program, vertex_shader);
         gl::AttachShader(program, fragment_shader);
         gl::LinkProgram(program);
@@ -139,9 +134,9 @@ pub fn main() {
         gl::GenBuffers(1, &mut vbo);
         gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
         gl::BufferData(gl::ARRAY_BUFFER,
-                            VERTEX_DATA.len() as GLsizeiptr,
-                            VERTEX_DATA.as_ptr() as *const _,
-                            gl::STATIC_DRAW);
+                       VERTEX_DATA.len() as GLsizeiptr,
+                       VERTEX_DATA.as_ptr() as *const _,
+                       gl::STATIC_DRAW);
 
         // Set up VAO.
         let position_attribute = gl::GetAttribLocation(program,
@@ -277,4 +272,34 @@ pub fn main() {
 
         ControlFlow::Continue
     });
+}
+
+fn compile_shader(kind: GLuint, source: &[u8], api: GLAPI) -> GLuint {
+    unsafe {
+        let preamble = match api {
+            GLAPI::GL => b"#version 330\n" as &[u8],
+            GLAPI::GLES => b"#version 300 es\n" as &[u8],
+        };
+
+        let shader = gl::CreateShader(kind);
+        let source_ptrs = [preamble.as_ptr() as *const GLchar, source.as_ptr() as *const GLchar];
+        let source_lens = [preamble.len() as GLint, source.len() as GLint];
+        gl::ShaderSource(shader, 2, source_ptrs.as_ptr(), source_lens.as_ptr());
+        gl::CompileShader(shader);
+
+        let mut status = 0;
+        gl::GetShaderiv(shader, gl::COMPILE_STATUS, &mut status);
+        if status != gl::TRUE as i32 {
+            let (mut info_log, mut info_log_len) = (vec![0u8; 65536], 0);
+            gl::GetShaderInfoLog(shader,
+                                 info_log.len() as i32,
+                                 &mut info_log_len,
+                                 info_log.as_mut_ptr() as *mut _);
+            info_log.truncate(info_log_len as usize);
+            eprintln!("Shader compilation failed: {}", String::from_utf8(info_log).unwrap());
+            panic!();
+        }
+
+        shader
+    }
 }
