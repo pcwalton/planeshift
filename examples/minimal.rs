@@ -16,7 +16,7 @@ pub fn main() {
                                      .build(&event_loop)
                                      .unwrap();
 
-    let mut context = LayerContext::from_window(&window);
+    let mut context = LayerContext::from_window(&window).unwrap();
     context.begin_transaction();
 
     let layer = context.add_surface_layer();

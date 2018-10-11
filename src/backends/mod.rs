@@ -15,3 +15,6 @@ pub mod core_animation;
 pub mod direct_composition;
 #[cfg(any(target_os = "linux", feature = "enable-glx"))]
 pub mod glx;
+
+// Special backends
+pub mod alternate;

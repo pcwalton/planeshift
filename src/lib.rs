@@ -136,7 +136,7 @@ pub trait Backend {
     // `winit` integration
 
     #[cfg(feature = "enable-winit")]
-    fn connection_from_window(window: &Window) -> Self::Connection;
+    fn connection_from_window(window: &Window) -> Result<Self::Connection, ()>;
 
     #[cfg(feature = "enable-winit")]
     fn host_layer_in_window(&mut self,
@@ -446,8 +446,9 @@ impl LayerContext<backends::default::Backend> {
 
     #[cfg(feature = "enable-winit")]
     #[inline]
-    pub fn from_window(window: &Window) -> LayerContext<backends::default::Backend> {
-        LayerContext::from_backend(backends::default::Backend::connection_from_window(window))
+    pub fn from_window(window: &Window) -> Result<LayerContext<backends::default::Backend>, ()> {
+        let connection = backends::default::Backend::connection_from_window(window)?;
+        Ok(LayerContext::from_backend(connection))
     }
 }
 

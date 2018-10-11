@@ -69,7 +69,7 @@ pub fn main() {
     let window = Window::new(&event_loop).unwrap();
 
     // Create a `planeshift` context.
-    let mut context = LayerContext::from_window(&window);
+    let mut context = LayerContext::from_window(&window).unwrap();
     context.begin_transaction();
 
     // Get our size.
