@@ -141,7 +141,7 @@ impl crate::Backend for Backend {
                                          geometry_component);
     }
 
-    fn remove_from_superlayer(&mut self, layer: LayerId) {
+    fn remove_from_superlayer(&mut self, layer: LayerId, _: LayerId) {
         self.native_component[layer].core_animation_layer.remove_from_superlayer()
     }
 

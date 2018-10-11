@@ -25,9 +25,7 @@ const BACKGROUND_COLOR: [f32; 4] = [0.92, 0.91, 0.92, 1.0];
 
 static SPRITE_IMAGE_PATH: &'static str = "resources/examples/firefox.png";
 
-static VERTEX_SHADER_SOURCE: &'static [u8] = b"#version 300 es
-
-    precision highp float;
+static VERTEX_SHADER_SOURCE: &'static [u8] = b"#version 330
 
     uniform mat2 uTransform;
 
@@ -42,9 +40,7 @@ static VERTEX_SHADER_SOURCE: &'static [u8] = b"#version 300 es
     }
 ";
 
-static FRAGMENT_SHADER_SOURCE: &'static [u8] = b"#version 300 es
-
-    precision highp float;
+static FRAGMENT_SHADER_SOURCE: &'static [u8] = b"#version 330
 
     uniform sampler2D uTexture;
 
