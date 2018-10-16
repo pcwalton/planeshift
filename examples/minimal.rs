@@ -7,7 +7,7 @@ extern crate winit;
 
 use euclid::{Point2D, Rect, Size2D};
 use gl::types::GLint;
-use planeshift::{GLContextOptions, LayerContext};
+use planeshift::{LayerContext, SurfaceOptions};
 use winit::{ControlFlow, Event, EventsLoop, WindowBuilder, WindowEvent};
 
 pub fn main() {
@@ -30,10 +30,11 @@ pub fn main() {
     let layer_size = Size2D::new(window_size.width as f32, window_size.height as f32);
     let layer_rect = Rect::new(Point2D::zero(), layer_size);
     context.set_layer_bounds(layer, &layer_rect);
-    context.set_layer_opaque(layer, true);
+    let surface_options = SurfaceOptions::OPAQUE;
+    context.set_layer_surface_options(layer, surface_options);
 
     // Create the GL context.
-    let mut gl_context = context.create_gl_context(GLContextOptions::empty()).unwrap();
+    let mut gl_context = context.create_gl_context(surface_options).unwrap();
     let binding = context.bind_layer_to_gl_context(layer, &mut gl_context).unwrap();
 
     unsafe {

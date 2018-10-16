@@ -22,6 +22,7 @@ bitflags = "1.0"
 euclid = "0.19"
 gl = "0.6"
 lazy_static = "1.1"
+tempfile = "3.0"
 
 [dependencies.winit]
 version = "0.17"
@@ -33,7 +34,12 @@ features = ["xlib"]
 optional = true
 
 [target.'cfg(target_os = "linux")'.dependencies.wayland-client]
-version = "0.21"
+version = "0.20"
+features = ["egl", "native_lib"]
+
+[target.'cfg(target_os = "linux")'.dependencies.wayland-sys]
+version = "0.20"
+features = ["client", "egl"]
 
 [target.'cfg(target_os = "linux")'.dependencies.x11]
 version = "2.18"
@@ -43,17 +49,17 @@ features = ["xlib"]
 cgl = "0.2"
 objc = "0.2"
 
-[target.'cfg(target_os = "macos")'.dependencies.cocoa]
-path = "/Users/pcwalton/Source/core-foundation-rs/cocoa"
+# [target.'cfg(target_os = "macos")'.dependencies.cocoa]
+# path = "/Users/pcwalton/Source/core-foundation-rs/cocoa"
 
-[target.'cfg(target_os = "macos")'.dependencies.core-foundation]
-path = "/Users/pcwalton/Source/core-foundation-rs/core-foundation"
+# [target.'cfg(target_os = "macos")'.dependencies.core-foundation]
+# path = "/Users/pcwalton/Source/core-foundation-rs/core-foundation"
 
-[target.'cfg(target_os = "macos")'.dependencies.core-graphics]
-path = "/Users/pcwalton/Source/core-foundation-rs/core-graphics"
+# [target.'cfg(target_os = "macos")'.dependencies.core-graphics]
+# path = "/Users/pcwalton/Source/core-foundation-rs/core-graphics"
 
-[target.'cfg(target_os = "macos")'.dependencies.io-surface]
-path = "/Users/pcwalton/Source/core-foundation-rs/io-surface"
+# [target.'cfg(target_os = "macos")'.dependencies.io-surface]
+# path = "/Users/pcwalton/Source/core-foundation-rs/io-surface"
 
 [target.'cfg(target_family = "windows")'.dependencies.mozangle]
 version = "0.1"
