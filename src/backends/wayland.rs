@@ -44,8 +44,9 @@ use winit::os::unix::WindowExt;
 
 use crate::egl::types::{EGLContext, EGLDisplay, EGLSurface, EGLint};
 use crate::egl;
-use crate::{GLAPI, GLContextLayerBinding, LayerContainerInfo, LayerGeometryInfo, LayerId};
-use crate::{LayerParent, LayerSurfaceInfo, LayerTreeInfo, LayerMap, SurfaceOptions};
+use crate::{Connection, ConnectionError, GLAPI, GLContextLayerBinding, LayerContainerInfo};
+use crate::{LayerGeometryInfo, LayerId, LayerParent, LayerSurfaceInfo, LayerTreeInfo, LayerMap};
+use crate::{SurfaceOptions};
 
 pub struct Backend {
     native_component: LayerMap<NativeInfo>,
@@ -71,17 +72,44 @@ pub struct Backend {
     zero_buffer: Proxy<WlBuffer>,
 
     egl_display: EGLDisplay,
+
+    window: Option<Window>,
 }
 
 impl crate::Backend for Backend {
-    type Connection = Connection;
+    type NativeConnection = WaylandConnection;
     type GLContext = GLContext;
     type NativeGLContext = EGLContext;
     type Host = Proxy<WlSurface>;
 
     // Constructor
 
-    fn new(mut connection: Connection) -> Backend {
+    fn new(connection: Connection<WaylandConnection>) -> Result<Backend, ConnectionError> {
+        // Unpack the connection if necessary.
+        let (mut connection, window) = match connection {
+            Connection::Native(wayland_connection) => (wayland_connection, None),
+            #[cfg(feature = "enable-winit")]
+            Connection::Winit(window_builder, event_queue) => {
+                let window = match window_builder.build(event_queue) {
+                    Err(_) => return Err(ConnectionError::new()),
+                    Ok(window) => window,
+                };
+                match window.get_wayland_display() {
+                    Some(display) => {
+                        unsafe {
+                            let (display, event_queue) =
+                                Display::from_external_display(display as *mut wl_display);
+                            (WaylandConnection {
+                                display,
+                                event_queue,
+                            }, Some(window))
+                        }
+                    }
+                    None => return Err(ConnectionError::new())
+                }
+            }
+        };
+
         // Initialize the output scale map.
         let output_scales = Arc::new(Mutex::new(HashMap::new()));
 
@@ -139,7 +167,7 @@ impl crate::Backend for Backend {
             });
         }
 
-        Backend {
+        Ok(Backend {
             native_component: LayerMap::new(),
 
             dirty_layers: HashSet::new(),
@@ -157,7 +185,9 @@ impl crate::Backend for Backend {
             zero_buffer,
 
             egl_display,
-        }
+
+            window,
+        })
     }
 
     // OpenGL context creation
@@ -223,7 +253,11 @@ impl crate::Backend for Backend {
 
     fn begin_transaction(&self) {}
 
-    fn end_transaction(&mut self, tree_component: &LayerMap<LayerTreeInfo>) {
+    fn end_transaction(&mut self,
+                       tree_component: &LayerMap<LayerTreeInfo>,
+                       _: &LayerMap<LayerContainerInfo>,
+                       _: &LayerMap<LayerGeometryInfo>,
+                       _: &LayerMap<LayerSurfaceInfo>) {
         // Reverse topological sort.
         let (mut commit_order, mut visited) = (vec![], HashSet::new());
         for layer in self.dirty_layers.drain() {
@@ -308,7 +342,11 @@ impl crate::Backend for Backend {
         self.dirty_layers.insert(new_child);
     }
 
-    fn remove_from_superlayer(&mut self, layer: LayerId, _: LayerId) {
+    fn remove_from_superlayer(&mut self,
+                              layer: LayerId,
+                              _: LayerId,
+                              _: &LayerMap<LayerTreeInfo>,
+                              _: &LayerMap<LayerGeometryInfo>) {
         if let Some(subsurface) = mem::replace(&mut self.native_component[layer].subsurface,
                                                None) {
             subsurface.destroy();
@@ -353,6 +391,7 @@ impl crate::Backend for Backend {
 
     fn set_layer_bounds(&mut self,
                         layer: LayerId,
+                        _: &Rect<f32>,
                         _: &LayerMap<LayerTreeInfo>,
                         _: &LayerMap<LayerContainerInfo>,
                         geometry_component: &LayerMap<LayerGeometryInfo>) {
@@ -379,7 +418,8 @@ impl crate::Backend for Backend {
     fn bind_layer_to_gl_context(&mut self,
                                 layer: LayerId,
                                 context: &mut Self::GLContext,
-                                _: &LayerMap<LayerGeometryInfo>)
+                                _: &LayerMap<LayerGeometryInfo>,
+                                _: &LayerMap<LayerSurfaceInfo>)
                                 -> Result<GLContextLayerBinding, ()> {
         unsafe {
             let native_component = &mut self.native_component[layer];
@@ -437,7 +477,11 @@ impl crate::Backend for Backend {
         }
     }
 
-    fn present_gl_context(&mut self, binding: GLContextLayerBinding, _: &Rect<f32>)
+    fn present_gl_context(&mut self,
+                          binding: GLContextLayerBinding,
+                          _: &Rect<f32>,
+                          _: &LayerMap<LayerTreeInfo>,
+                          _: &LayerMap<LayerGeometryInfo>)
                           -> Result<(), ()> {
         unsafe {
             let egl_surface = self.native_component[binding.layer]
@@ -459,31 +503,18 @@ impl crate::Backend for Backend {
     // `winit` integration
 
     #[cfg(feature = "enable-winit")]
-    fn connection_from_window(window: &winit::Window) -> Result<Connection, ()> {
-        match window.get_wayland_display() {
-            Some(display) => {
-                unsafe {
-                    let (display, event_queue) =
-                        Display::from_external_display(display as *mut wl_display);
-                    Ok(Connection {
-                        display,
-                        event_queue,
-                    })
-                }
-            }
-            None => Err(()),
-        }
+    fn window(&self) -> Option<&Window> {
+        self.window.as_ref()
     }
 
     #[cfg(feature = "enable-winit")]
     fn host_layer_in_window(&mut self,
-                            window: &Window,
                             layer: LayerId,
                             tree_component: &LayerMap<LayerTreeInfo>,
                             container_component: &LayerMap<LayerContainerInfo>,
                             geometry_component: &LayerMap<LayerGeometryInfo>)
                             -> Result<(), ()> {
-        match window.get_wayland_surface() {
+        match self.window().unwrap().get_wayland_surface() {
             Some(surface) => {
                 unsafe {
                     self.host_layer(layer,
@@ -544,7 +575,7 @@ impl Drop for Backend {
     }
 }
 
-pub struct Connection {
+pub struct WaylandConnection {
     pub display: Display,
     pub event_queue: EventQueue,
 }

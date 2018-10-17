@@ -546,6 +546,16 @@ impl Debug for ConnectionError {
     }
 }
 
+impl ConnectionError {
+    #[inline]
+    pub fn new() -> ConnectionError {
+        ConnectionError {
+            #[cfg(feature = "enable-winit")]
+            window_builder: None,
+        }
+    }
+}
+
 // Entity-component system infrastructure
 
 impl<T> LayerMap<T> {
