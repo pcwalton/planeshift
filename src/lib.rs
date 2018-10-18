@@ -12,9 +12,6 @@ extern crate lazy_static;
 #[cfg(feature = "enable-winit")]
 extern crate winit;
 
-#[cfg(feature = "enable-glx")]
-extern crate x11;
-
 #[cfg(target_os = "linux")]
 extern crate wayland_client;
 #[cfg(target_os = "linux")]
@@ -70,16 +67,6 @@ mod egl {
     pub type khronos_utime_nanoseconds_t = khronos_uint64_t;
 
     include!(concat!(env!("OUT_DIR"), "/egl_bindings.rs"));
-}
-
-#[cfg(target_os = "linux")]
-mod glx {
-    include!(concat!(env!("OUT_DIR"), "/glx_bindings.rs"));
-}
-
-#[cfg(target_os = "linux")]
-mod glx_extra {
-    include!(concat!(env!("OUT_DIR"), "/glx_extra_bindings.rs"));
 }
 
 pub struct LayerContext<B = backends::default::Backend> where B: Backend {
