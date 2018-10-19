@@ -39,11 +39,12 @@ extern crate winapi;
 
 use euclid::Rect;
 use gl::types::GLuint;
+use std::fmt::{self, Debug, Formatter};
 use std::mem;
 use std::ops::{Index, IndexMut};
 
 #[cfg(feature = "enable-winit")]
-use winit::Window;
+use winit::{EventsLoop, Window, WindowBuilder};
 
 pub mod backends;
 
@@ -107,7 +108,11 @@ pub trait Backend {
 
     // Transactions
     fn begin_transaction(&self);
-    fn end_transaction(&mut self, tree_component: &LayerMap<LayerTreeInfo>);
+    fn end_transaction(&mut self,
+                       tree_component: &LayerMap<LayerTreeInfo>,
+                       container_component: &LayerMap<LayerContainerInfo>,
+                       geometry_component: &LayerMap<LayerGeometryInfo>,
+                       surface_component: &LayerMap<LayerSurfaceInfo>);
 
     // Layer creation and destruction
     fn add_container_layer(&mut self, new_layer: LayerId);
@@ -122,7 +127,11 @@ pub trait Backend {
                      tree_component: &LayerMap<LayerTreeInfo>,
                      container_component: &LayerMap<LayerContainerInfo>,
                      geometry_component: &LayerMap<LayerGeometryInfo>);
-    fn remove_from_superlayer(&mut self, layer: LayerId, parent: LayerId);
+    fn remove_from_superlayer(&mut self,
+                              layer: LayerId,
+                              parent: LayerId,
+                              tree_component: &LayerMap<LayerTreeInfo>,
+                              geometry_component: &LayerMap<LayerGeometryInfo>);
 
     // Native hosting
     unsafe fn host_layer(&mut self,
@@ -136,6 +145,7 @@ pub trait Backend {
     // Geometry
     fn set_layer_bounds(&mut self,
                         layer: LayerId,
+                        old_bounds: &Rect<f32>,
                         tree_component: &LayerMap<LayerTreeInfo>,
                         container_component: &LayerMap<LayerContainerInfo>,
                         geometry_component: &LayerMap<LayerGeometryInfo>);
@@ -149,19 +159,27 @@ pub trait Backend {
     fn bind_layer_to_gl_context(&mut self,
                                 layer: LayerId,
                                 context: &mut Self::GLContext,
-                                geometry_component: &LayerMap<LayerGeometryInfo>)
+                                geometry_component: &LayerMap<LayerGeometryInfo>,
+                                surface_component: &LayerMap<LayerSurfaceInfo>)
                                 -> Result<GLContextLayerBinding, ()>;
-    fn present_gl_context(&mut self, binding: GLContextLayerBinding, changed_rect: &Rect<f32>)
+    fn present_gl_context(&mut self,
+                          binding: GLContextLayerBinding,
+                          changed_rect: &Rect<f32>,
+                          tree_component: &LayerMap<LayerTreeInfo>,
+                          geometry_component: &LayerMap<LayerGeometryInfo>)
                           -> Result<(), ()>;
 
     // `winit` integration
 
     #[cfg(feature = "enable-winit")]
-    fn connection_from_window(window: &Window) -> Result<Self::Connection, ()>;
+    fn window(&self) -> Option<&Window>;
+
+    #[cfg(feature = "enable-winit")]
+    fn connection_from_window(window: WindowBuilder, events_loop: &EventsLoop)
+                              -> Result<Self::Connection, WinitConnectionError>;
 
     #[cfg(feature = "enable-winit")]
     fn host_layer_in_window(&mut self,
-                            window: &Window,
                             layer: LayerId,
                             tree_component: &LayerMap<LayerTreeInfo>,
                             container_component: &LayerMap<LayerContainerInfo>,
@@ -271,7 +289,10 @@ impl<B> LayerContext<B> where B: Backend {
         self.transaction_level -= 1;
 
         if self.transaction_level == 0 {
-            self.backend.end_transaction(&self.tree_component);
+            self.backend.end_transaction(&self.tree_component,
+                                         &self.container_component,
+                                         &self.geometry_component,
+                                         &self.surface_component);
         }
     }
 
@@ -323,9 +344,14 @@ impl<B> LayerContext<B> where B: Backend {
             debug_assert_eq!(self.parent_of(reference), Some(&LayerParent::Layer(parent)));
         }
 
+        let new_prev_sibling = match reference {
+            Some(reference) => self.tree_component[reference].prev_sibling,
+            None => self.container_component[parent].last_child,
+        };
+
         self.tree_component.add(new_child, LayerTreeInfo {
             parent: LayerParent::Layer(parent),
-            prev_sibling: reference.and_then(|layer| self.tree_component[layer].prev_sibling),
+            prev_sibling: new_prev_sibling,
             next_sibling: reference,
         });
 
@@ -376,7 +402,10 @@ impl<B> LayerContext<B> where B: Backend {
             LayerParent::NativeHost => self.backend.unhost_layer(old_child),
 
             LayerParent::Layer(parent_layer) => {
-                self.backend.remove_from_superlayer(old_child, parent_layer);
+                self.backend.remove_from_superlayer(old_child,
+                                                    parent_layer,
+                                                    &self.tree_component,
+                                                    &self.geometry_component);
 
                 match old_tree.prev_sibling {
                     None => {
@@ -408,6 +437,7 @@ impl<B> LayerContext<B> where B: Backend {
         self.tree_component.remove_if_present(layer);
         self.container_component.remove_if_present(layer);
         self.geometry_component.remove_if_present(layer);
+        self.surface_component.remove_if_present(layer);
 
         self.backend.delete_layer(layer);
     }
@@ -426,9 +456,11 @@ impl<B> LayerContext<B> where B: Backend {
     pub fn set_layer_bounds(&mut self, layer: LayerId, new_bounds: &Rect<f32>) {
         debug_assert!(self.in_transaction());
 
-        self.geometry_component.get_mut_default(layer).bounds = *new_bounds;
+        let old_bounds = mem::replace(&mut self.geometry_component.get_mut_default(layer).bounds,
+                                      *new_bounds);
 
         self.backend.set_layer_bounds(layer,
+                                      &old_bounds,
                                       &self.tree_component,
                                       &self.container_component,
                                       &self.geometry_component);
@@ -450,20 +482,31 @@ impl<B> LayerContext<B> where B: Backend {
         debug_assert!(self.in_transaction());
         debug_assert!(!self.container_component.has(layer));
 
-        self.backend.bind_layer_to_gl_context(layer, context, &self.geometry_component)
+        self.backend.bind_layer_to_gl_context(layer,
+                                              context,
+                                              &self.geometry_component,
+                                              &self.surface_component)
     }
 
     pub fn present_gl_context(&mut self, binding: GLContextLayerBinding, changed_rect: &Rect<f32>)
                               -> Result<(), ()> {
         debug_assert!(self.in_transaction());
 
-        self.backend.present_gl_context(binding, changed_rect)
+        self.backend.present_gl_context(binding,
+                                        changed_rect,
+                                        &self.tree_component,
+                                        &self.geometry_component)
     }
 
     // `winit` integration
 
     #[cfg(feature = "enable-winit")]
-    pub fn host_layer_in_window(&mut self, window: &Window, layer: LayerId) -> Result<(), ()> {
+    pub fn window(&self) -> Option<&Window> {
+        self.backend.window()
+    }
+
+    #[cfg(feature = "enable-winit")]
+    pub fn host_layer_in_window(&mut self, layer: LayerId) -> Result<(), ()> {
         debug_assert!(self.in_transaction());
 
         self.tree_component.add(layer, LayerTreeInfo {
@@ -472,8 +515,7 @@ impl<B> LayerContext<B> where B: Backend {
             next_sibling: None,
         });
 
-        self.backend.host_layer_in_window(window,
-                                          layer,
+        self.backend.host_layer_in_window(layer,
                                           &self.tree_component,
                                           &self.container_component,
                                           &self.geometry_component)
@@ -489,9 +531,31 @@ impl LayerContext<backends::default::Backend> {
 
     #[cfg(feature = "enable-winit")]
     #[inline]
-    pub fn from_window(window: &Window) -> Result<LayerContext<backends::default::Backend>, ()> {
-        let connection = backends::default::Backend::connection_from_window(window)?;
+    pub fn from_window(window: WindowBuilder, events_loop: &EventsLoop)
+                       -> Result<LayerContext<backends::default::Backend>, WinitConnectionError> {
+        let connection = backends::default::Backend::connection_from_window(window, events_loop)?;
         Ok(LayerContext::from_backend(connection))
+    }
+}
+
+// Errors
+
+#[cfg(feature = "enable-winit")]
+pub struct WinitConnectionError {
+    window_builder: WindowBuilder,
+}
+
+#[cfg(feature = "enable-winit")]
+impl Debug for WinitConnectionError {
+    fn fmt(&self, formatter: &mut Formatter) -> Result<(), fmt::Error> {
+        "WinitConnectionError".fmt(formatter)
+    }
+}
+
+impl WinitConnectionError {
+    #[inline]
+    pub fn into_window_builder(self) -> WindowBuilder {
+        self.window_builder
     }
 }
 
@@ -535,6 +599,14 @@ impl<T> LayerMap<T> {
             None
         } else {
             self.0[layer_id.0 as usize].as_ref()
+        }
+    }
+
+    fn get_mut(&mut self, layer_id: LayerId) -> Option<&mut T> {
+        if (layer_id.0 as usize) >= self.0.len() {
+            None
+        } else {
+            self.0[layer_id.0 as usize].as_mut()
         }
     }
 }

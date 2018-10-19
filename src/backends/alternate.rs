@@ -8,10 +8,11 @@
 use euclid::Rect;
 
 #[cfg(feature = "enable-winit")]
-use winit::Window;
+use winit::{EventsLoop, Window, WindowBuilder};
 
 use crate::{GLAPI, GLContextLayerBinding, LayerId, LayerMap, LayerContainerInfo};
 use crate::{LayerGeometryInfo, LayerSurfaceInfo, LayerTreeInfo, SurfaceOptions};
+use crate::{WinitConnectionError};
 
 pub enum Backend<A, B> where A: crate::Backend, B: crate::Backend {
     A(A),
@@ -82,10 +83,24 @@ impl<A, B> crate::Backend for Backend<A, B> where A: crate::Backend, B: crate::B
         }
     }
 
-    fn end_transaction(&mut self, tree_component: &LayerMap<LayerTreeInfo>) {
+    fn end_transaction(&mut self,
+                       tree_component: &LayerMap<LayerTreeInfo>,
+                       container_component: &LayerMap<LayerContainerInfo>,
+                       geometry_component: &LayerMap<LayerGeometryInfo>,
+                       surface_component: &LayerMap<LayerSurfaceInfo>) {
         match *self {
-            Backend::A(ref mut this) => this.end_transaction(tree_component),
-            Backend::B(ref mut this) => this.end_transaction(tree_component),
+            Backend::A(ref mut this) => {
+                this.end_transaction(tree_component,
+                                     container_component,
+                                     geometry_component,
+                                     surface_component)
+            }
+            Backend::B(ref mut this) => {
+                this.end_transaction(tree_component,
+                                     container_component,
+                                     geometry_component,
+                                     surface_component)
+            }
         }
     }
 
@@ -141,14 +156,23 @@ impl<A, B> crate::Backend for Backend<A, B> where A: crate::Backend, B: crate::B
         }
     }
 
-    fn remove_from_superlayer(&mut self, layer: LayerId, parent: LayerId) {
+    fn remove_from_superlayer(&mut self,
+                              layer: LayerId,
+                              parent: LayerId,
+                              tree_component: &LayerMap<LayerTreeInfo>,
+                              geometry_component: &LayerMap<LayerGeometryInfo>) {
         match *self {
-            Backend::A(ref mut this) => this.remove_from_superlayer(layer, parent),
-            Backend::B(ref mut this) => this.remove_from_superlayer(layer, parent),
+            Backend::A(ref mut this) => {
+                this.remove_from_superlayer(layer, parent, tree_component, geometry_component)
+            }
+            Backend::B(ref mut this) => {
+                this.remove_from_superlayer(layer, parent, tree_component, geometry_component)
+            }
         }
     }
 
     // Native hosting
+
 
     unsafe fn host_layer(&mut self,
                          layer: LayerId,
@@ -195,18 +219,21 @@ impl<A, B> crate::Backend for Backend<A, B> where A: crate::Backend, B: crate::B
     // Geometry
     fn set_layer_bounds(&mut self,
                         layer: LayerId,
+                        old_bounds: &Rect<f32>,
                         tree_component: &LayerMap<LayerTreeInfo>,
                         container_component: &LayerMap<LayerContainerInfo>,
                         geometry_component: &LayerMap<LayerGeometryInfo>) {
         match *self {
             Backend::A(ref mut this) => {
                 this.set_layer_bounds(layer,
+                                      old_bounds,
                                       tree_component,
                                       container_component,
                                       geometry_component)
             }
             Backend::B(ref mut this) => {
                 this.set_layer_bounds(layer,
+                                      old_bounds,
                                       tree_component,
                                       container_component,
                                       geometry_component)
@@ -230,41 +257,65 @@ impl<A, B> crate::Backend for Backend<A, B> where A: crate::Backend, B: crate::B
     fn bind_layer_to_gl_context(&mut self,
                                 layer: LayerId,
                                 context: &mut Self::GLContext,
-                                geometry_component: &LayerMap<LayerGeometryInfo>)
+                                geometry_component: &LayerMap<LayerGeometryInfo>,
+                                surface_component: &LayerMap<LayerSurfaceInfo>)
                                 -> Result<GLContextLayerBinding, ()> {
         match (self, context) {
             (&mut Backend::A(ref mut this), &mut GLContext::A(ref mut context)) => {
-                this.bind_layer_to_gl_context(layer, context, geometry_component)
+                this.bind_layer_to_gl_context(layer,
+                                              context,
+                                              geometry_component,
+                                              surface_component)
             }
             (&mut Backend::B(ref mut this), &mut GLContext::B(ref mut context)) => {
-                this.bind_layer_to_gl_context(layer, context, geometry_component)
+                this.bind_layer_to_gl_context(layer,
+                                              context,
+                                              geometry_component,
+                                              surface_component)
             }
             _ => panic!("bind_layer_to_gl_context(): mismatched backend and GL context"),
         }
     }
 
-    fn present_gl_context(&mut self, binding: GLContextLayerBinding, changed_rect: &Rect<f32>)
+    fn present_gl_context(&mut self,
+                          binding: GLContextLayerBinding,
+                          changed_rect: &Rect<f32>,
+                          tree_component: &LayerMap<LayerTreeInfo>,
+                          geometry_component: &LayerMap<LayerGeometryInfo>)
                           -> Result<(), ()> {
         match *self {
-            Backend::A(ref mut this) => this.present_gl_context(binding, changed_rect),
-            Backend::B(ref mut this) => this.present_gl_context(binding, changed_rect),
+            Backend::A(ref mut this) => {
+                this.present_gl_context(binding, changed_rect, tree_component, geometry_component)
+            }
+            Backend::B(ref mut this) => {
+                this.present_gl_context(binding, changed_rect, tree_component, geometry_component)
+            }
         }
     }
 
     // `winit` integration
 
     #[cfg(feature = "enable-winit")]
-    fn connection_from_window(window: &Window) -> Result<Self::Connection, ()> {
-        if let Ok(connection) = A::connection_from_window(window) {
-            Ok(Connection::A(connection))
-        } else {
-            Ok(Connection::B(B::connection_from_window(window)?))
+    fn window(&self) -> Option<&Window> {
+        match *self {
+            Backend::A(ref this) => this.window(),
+            Backend::B(ref this) => this.window(),
+        }
+    }
+
+    #[cfg(feature = "enable-winit")]
+    fn connection_from_window(window: WindowBuilder, events_loop: &EventsLoop)
+                              -> Result<Self::Connection, WinitConnectionError> {
+        match A::connection_from_window(window, events_loop) {
+            Ok(connection) => Ok(Connection::A(connection)),
+            Err(err) => {
+                Ok(Connection::B(B::connection_from_window(err.window_builder, events_loop)?))
+            }
         }
     }
 
     #[cfg(feature = "enable-winit")]
     fn host_layer_in_window(&mut self,
-                            window: &Window,
                             layer: LayerId,
                             tree_component: &LayerMap<LayerTreeInfo>,
                             container_component: &LayerMap<LayerContainerInfo>,
@@ -272,15 +323,13 @@ impl<A, B> crate::Backend for Backend<A, B> where A: crate::Backend, B: crate::B
                             -> Result<(), ()> {
         match *self {
             Backend::A(ref mut this) => {
-                this.host_layer_in_window(window,
-                                          layer,
+                this.host_layer_in_window(layer,
                                           tree_component,
                                           container_component,
                                           geometry_component)
             }
             Backend::B(ref mut this) => {
-                this.host_layer_in_window(window,
-                                          layer,
+                this.host_layer_in_window(layer,
                                           tree_component,
                                           container_component,
                                           geometry_component)

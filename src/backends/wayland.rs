@@ -115,7 +115,7 @@ impl crate::Backend for Backend {
             globals.instantiate_auto().unwrap().implement(|_, _| ());
         let shm: Proxy<WlShm> = globals.instantiate_auto().unwrap().implement(|_, _| ());
 
-        // Open `/dev/zero` so we can supply layer contents for transparent layers.
+        // Open a temporary file so we can supply layer contents for transparent layers.
         let mut zero_file = tempfile::tempfile().unwrap();
         zero_file.write_all(&[0; 4]).unwrap();
         drop(zero_file.flush());

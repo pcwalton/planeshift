@@ -22,12 +22,13 @@ use std::ptr;
 use std::sync::Mutex;
 
 #[cfg(feature = "enable-winit")]
-use winit::Window;
-#[cfg(all(feature = "enable-winit", target_os = "macos"))]
+use winit::{EventsLoop, Window, WindowBuilder};
+#[cfg(feature = "enable-winit")]
 use winit::os::macos::WindowExt;
 
 use crate::{GLAPI, GLContextLayerBinding, LayerContainerInfo, LayerGeometryInfo, LayerId};
 use crate::{LayerMap, LayerParent, LayerSurfaceInfo, LayerTreeInfo, SurfaceOptions};
+use crate::{WinitConnectionError};
 
 #[allow(non_upper_case_globals)]
 const kCGLOGLPVersion_3_2_Core: CGLPixelFormatAttribute = 0x3200;
@@ -40,21 +41,25 @@ lazy_static! {
 
 pub struct Backend {
     native_component: LayerMap<NativeInfo>,
+
+    connection: Connection,
 }
 
 impl crate::Backend for Backend {
-    type Connection = ();
+    type Connection = Connection;
     type GLContext = GLContext;
     type NativeGLContext = CGLContextObj;
     type Host = id;
 
-    fn new(_: ()) -> Backend {
+    fn new(connection: Connection) -> Backend {
         let identifier = CFString::from(OPENGL_FRAMEWORK_IDENTIFIER);
         let bundle = CFBundle::bundle_with_identifier(identifier).unwrap();
         gl::load_with(move |name| bundle.function_pointer_for_name(CFString::from(name)));
 
         Backend {
             native_component: LayerMap::new(),
+
+            connection,
         }
     }
 
@@ -100,7 +105,11 @@ impl crate::Backend for Backend {
         transaction::set_disable_actions(true);
     }
 
-    fn end_transaction(&mut self, _: &LayerMap<LayerTreeInfo>) {
+    fn end_transaction(&mut self,
+                       _: &LayerMap<LayerTreeInfo>,
+                       _: &LayerMap<LayerContainerInfo>,
+                       _: &LayerMap<LayerGeometryInfo>,
+                       _: &LayerMap<LayerSurfaceInfo>) {
         transaction::commit();
     }
 
@@ -146,7 +155,11 @@ impl crate::Backend for Backend {
                                          geometry_component);
     }
 
-    fn remove_from_superlayer(&mut self, layer: LayerId, _: LayerId) {
+    fn remove_from_superlayer(&mut self,
+                              layer: LayerId,
+                              _: LayerId,
+                              _: &LayerMap<LayerTreeInfo>,
+                              _: &LayerMap<LayerGeometryInfo>) {
         self.native_component[layer].core_animation_layer.remove_from_superlayer()
     }
 
@@ -188,6 +201,7 @@ impl crate::Backend for Backend {
 
     fn set_layer_bounds(&mut self,
                         layer: LayerId,
+                        _: &Rect<f32>,
                         tree_component: &LayerMap<LayerTreeInfo>,
                         _: &LayerMap<LayerContainerInfo>,
                         geometry_component: &LayerMap<LayerGeometryInfo>) {
@@ -209,7 +223,8 @@ impl crate::Backend for Backend {
     fn bind_layer_to_gl_context(&mut self,
                                 layer: LayerId,
                                 context: &mut Self::GLContext,
-                                geometry_component: &LayerMap<LayerGeometryInfo>)
+                                geometry_component: &LayerMap<LayerGeometryInfo>,
+                                _: &LayerMap<LayerSurfaceInfo>)
                                 -> Result<GLContextLayerBinding, ()> {
         let native_component = &mut self.native_component[layer];
         let layer_size = geometry_component[layer].bounds.size.round().to_u32();
@@ -245,7 +260,11 @@ impl crate::Backend for Backend {
         }
     }
 
-    fn present_gl_context(&mut self, binding: GLContextLayerBinding, _: &Rect<f32>)
+    fn present_gl_context(&mut self,
+                          binding: GLContextLayerBinding,
+                          _: &Rect<f32>,
+                          _: &LayerMap<LayerTreeInfo>,
+                          _: &LayerMap<LayerGeometryInfo>)
                           -> Result<(), ()> {
         unsafe {
             gl::Flush();
@@ -265,13 +284,18 @@ impl crate::Backend for Backend {
     // `winit` integration
 
     #[cfg(feature = "enable-winit")]
-    fn connection_from_window(_: &winit::Window) -> Result<(), ()> {
-        Ok(())
+    fn window(&self) -> Option<&Window> {
+        self.connection.window.as_ref()
+    }
+
+    #[cfg(feature = "enable-winit")]
+    fn connection_from_window(window: WindowBuilder, events_loop: &EventsLoop)
+                              -> Result<Connection, WinitConnectionError> {
+        Ok(Connection::new(Some(window.build(events_loop).unwrap())))
     }
 
     #[cfg(feature = "enable-winit")]
     fn host_layer_in_window(&mut self,
-                            window: &Window,
                             layer: LayerId,
                             tree_component: &LayerMap<LayerTreeInfo>,
                             container_component: &LayerMap<LayerContainerInfo>,
@@ -279,7 +303,7 @@ impl crate::Backend for Backend {
                             -> Result<(), ()> {
         unsafe {
             self.host_layer(layer,
-                            window.get_nsview() as id,
+                            self.window().ok_or(())?.get_nsview() as id,
                             tree_component,
                             container_component,
                             geometry_component);
@@ -373,6 +397,24 @@ impl Backend {
         }
     }
 }
+
+#[cfg(feature = "enable-winit")]
+pub struct Connection {
+    window: Option<Window>,
+}
+
+#[cfg(feature = "enable-winit")]
+impl Connection {
+    #[inline]
+    fn new(window: Option<Window>) -> Connection {
+        Connection {
+            window,
+        }
+    }
+}
+
+#[cfg(not(feature = "enable-winit"))]
+pub struct Connection;
 
 pub struct GLContext {
     cgl_context: CGLContextObj,

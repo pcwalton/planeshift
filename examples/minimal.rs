@@ -12,19 +12,21 @@ use winit::{ControlFlow, Event, EventsLoop, WindowBuilder, WindowEvent};
 
 pub fn main() {
     let mut event_loop = EventsLoop::new();
-    let window = WindowBuilder::new().with_title("planeshift minimal example")
-                                     .build(&event_loop)
-                                     .unwrap();
+    let window = WindowBuilder::new().with_title("planeshift minimal example");
 
-    let mut context = LayerContext::from_window(&window).unwrap();
+    let mut context = LayerContext::from_window(window, &event_loop).unwrap();
     context.begin_transaction();
 
     let layer = context.add_surface_layer();
-    context.host_layer_in_window(&window, layer).unwrap();
+    context.host_layer_in_window(layer).unwrap();
 
     // Get our size.
-    let hidpi_factor = window.get_hidpi_factor();
-    let window_size = window.get_inner_size().unwrap().to_physical(hidpi_factor);
+    let hidpi_factor = context.window().unwrap().get_hidpi_factor();
+    let window_size = context.window()
+                             .unwrap()
+                             .get_inner_size()
+                             .unwrap()
+                             .to_physical(hidpi_factor);
     let (width, height): (u32, u32) = window_size.into();
 
     let layer_size = Size2D::new(window_size.width as f32, window_size.height as f32);

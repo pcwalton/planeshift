@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
-use winit::{ControlFlow, Event, EventsLoop, Window, WindowEvent};
+use winit::{ControlFlow, Event, EventsLoop, WindowBuilder, WindowEvent};
 
 const SPRITE_SIZE: u32 = 256;
 const SPRITE_COUNT: u32 = 5;
@@ -68,19 +68,23 @@ pub fn main() {
 
     // Set up `winit`.
     let mut event_loop = EventsLoop::new();
-    let window = Window::new(&event_loop).unwrap();
+    let window = WindowBuilder::new();
 
     // Create a `planeshift` context.
-    let mut context = LayerContext::from_window(&window).unwrap();
+    let mut context = LayerContext::from_window(window, &event_loop).unwrap();
     context.begin_transaction();
 
     // Get our size.
-    let hidpi_factor = window.get_hidpi_factor();
-    let window_size = window.get_inner_size().unwrap().to_physical(hidpi_factor);
+    let hidpi_factor = context.window().unwrap().get_hidpi_factor();
+    let window_size = context.window()
+                             .unwrap()
+                             .get_inner_size()
+                             .unwrap()
+                             .to_physical(hidpi_factor);
 
     // Create the root layer.
     let root_layer = context.add_container_layer();
-    context.host_layer_in_window(&window, root_layer).unwrap();
+    context.host_layer_in_window(root_layer).unwrap();
     let root_layer_size = Size2D::new(window_size.width as f32, window_size.height as f32);
     let root_layer_rect = Rect::new(Point2D::zero(), root_layer_size);
     context.set_layer_bounds(root_layer, &root_layer_rect);
