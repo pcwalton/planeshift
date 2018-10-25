@@ -90,14 +90,14 @@ pub struct LayerMap<T>(pub Vec<Option<T>>);
 
 // Backend definition
 
-pub trait Backend {
-    type Connection;
+pub trait Backend: Sized {
+    type NativeConnection;
     type GLContext;
     type NativeGLContext;
     type Host;
 
     // Constructor
-    fn new(connection: Self::Connection) -> Self;
+    fn new(connection: Connection<Self::NativeConnection>) -> Result<Self, ConnectionError>;
 
     // OpenGL context creation
     fn create_gl_context(&mut self, surface_options: SurfaceOptions)
@@ -175,10 +175,6 @@ pub trait Backend {
     fn window(&self) -> Option<&Window>;
 
     #[cfg(feature = "enable-winit")]
-    fn connection_from_window(window: WindowBuilder, events_loop: &EventsLoop)
-                              -> Result<Self::Connection, WinitConnectionError>;
-
-    #[cfg(feature = "enable-winit")]
     fn host_layer_in_window(&mut self,
                             layer: LayerId,
                             tree_component: &LayerMap<LayerTreeInfo>,
@@ -188,6 +184,12 @@ pub trait Backend {
 }
 
 // Public structures
+
+pub enum Connection<'a, N> {
+    Native(N),
+    #[cfg(feature = "enable-winit")]
+    Winit(WindowBuilder, &'a EventsLoop),
+}
 
 bitflags! {
     pub struct SurfaceOptions: u8 {
@@ -246,8 +248,11 @@ pub enum LayerParent {
 impl<B> LayerContext<B> where B: Backend {
     // Core functions
 
-    pub fn from_backend(connection: B::Connection) -> LayerContext<B> {
-        LayerContext {
+    pub fn with_backend_connection(connection: Connection<B::NativeConnection>)
+                                   -> Result<LayerContext<B>, ConnectionError> {
+        Ok(LayerContext {
+            backend: Backend::new(connection)?,
+
             next_layer_id: LayerId(0),
             transaction_level: 0,
 
@@ -255,9 +260,7 @@ impl<B> LayerContext<B> where B: Backend {
             container_component: LayerMap::new(),
             geometry_component: LayerMap::new(),
             surface_component: LayerMap::new(),
-
-            backend: Backend::new(connection),
-        }
+        })
     }
 
     // OpenGL context creation
@@ -524,38 +527,22 @@ impl<B> LayerContext<B> where B: Backend {
 
 impl LayerContext<backends::default::Backend> {
     #[inline]
-    pub fn new(connection: <backends::default::Backend as Backend>::Connection)
-               -> LayerContext<backends::default::Backend> {
-        LayerContext::from_backend(connection)
-    }
-
-    #[cfg(feature = "enable-winit")]
-    #[inline]
-    pub fn from_window(window: WindowBuilder, events_loop: &EventsLoop)
-                       -> Result<LayerContext<backends::default::Backend>, WinitConnectionError> {
-        let connection = backends::default::Backend::connection_from_window(window, events_loop)?;
-        Ok(LayerContext::from_backend(connection))
+    pub fn new(connection: Connection<<backends::default::Backend as Backend>::NativeConnection>)
+               -> Result<LayerContext<backends::default::Backend>, ConnectionError> {
+        LayerContext::with_backend_connection(connection)
     }
 }
 
 // Errors
 
-#[cfg(feature = "enable-winit")]
-pub struct WinitConnectionError {
-    window_builder: WindowBuilder,
+pub struct ConnectionError {
+    #[cfg(feature = "enable-winit")]
+    window_builder: Option<WindowBuilder>,
 }
 
-#[cfg(feature = "enable-winit")]
-impl Debug for WinitConnectionError {
+impl Debug for ConnectionError {
     fn fmt(&self, formatter: &mut Formatter) -> Result<(), fmt::Error> {
-        "WinitConnectionError".fmt(formatter)
-    }
-}
-
-impl WinitConnectionError {
-    #[inline]
-    pub fn into_window_builder(self) -> WindowBuilder {
-        self.window_builder
+        "ConnectionError".fmt(formatter)
     }
 }
 
@@ -636,6 +623,18 @@ impl<T> IndexMut<LayerId> for LayerMap<T> {
     #[inline]
     fn index_mut(&mut self, layer_id: LayerId) -> &mut T {
         self.0[layer_id.0 as usize].as_mut().unwrap()
+    }
+}
+
+// Specific type infrastructure
+
+impl<'a, N> Connection<'a, N> {
+    pub fn into_window(self) -> Option<Window> {
+        match self {
+            Connection::Native(_) => None,
+            #[cfg(feature = "enable-winit")]
+            Connection::Winit(window_builder, event_loop) => window_builder.build(event_loop).ok(),
+        }
     }
 }
 

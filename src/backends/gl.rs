@@ -13,9 +13,9 @@ use glutin::{Api, ContextBuilder, GlContext, GlProfile, GlRequest, GlWindow};
 #[cfg(feature = "enable-winit")]
 use winit::{EventsLoop, Window, WindowBuilder};
 
-use crate::{GLAPI, GLContextLayerBinding, LayerId, LayerMap, LayerContainerInfo};
-use crate::{LayerGeometryInfo, LayerParent, LayerSurfaceInfo, LayerTreeInfo, SurfaceOptions};
-use crate::{WinitConnectionError};
+use crate::{Connection, ConnectionError, GLAPI, GLContextLayerBinding, LayerContainerInfo};
+use crate::{LayerGeometryInfo, LayerId, LayerMap, LayerParent, LayerSurfaceInfo, LayerTreeInfo};
+use crate::{SurfaceOptions};
 
 // FIXME(pcwalton): Clean up GL resources in destructor.
 pub struct Backend {
@@ -37,13 +37,21 @@ pub struct Backend {
 }
 
 impl crate::Backend for Backend {
-    type Connection = Box<dyn GLInterface>;
+    type NativeConnection = Box<dyn GLInterface>;
     type GLContext = ();
     type NativeGLContext = ();
     type Host = ();
 
     // Constructor
-    fn new(connection: Box<dyn GLInterface>) -> Self {
+    fn new(connection: Connection<Box<dyn GLInterface>>) -> Result<Self, ConnectionError> {
+        let connection = match connection {
+            #[cfg(feature = "enable-winit")]
+            Connection::Winit(window_builder, event_loop) => {
+                Box::new(Interface::new(window_builder, event_loop))
+            }
+            Connection::Native(connection) => connection,
+        };
+
         // Load GL symbols.
         gl::load_with(|name| connection.get_proc_address(name).unwrap_or(ptr::null()));
 
@@ -99,7 +107,7 @@ impl crate::Backend for Backend {
             gl::EnableVertexAttribArray(attribute_position as GLuint);
         }
 
-        Backend {
+        Ok(Backend {
             native_component: LayerMap::new(),
 
             connection,
@@ -115,7 +123,7 @@ impl crate::Backend for Backend {
             uniform_texture,
             vertex_array,
             vertex_buffer,
-        }
+        })
     }
 
     // OpenGL context creation
@@ -414,12 +422,6 @@ impl crate::Backend for Backend {
     #[cfg(feature = "enable-winit")]
     fn window(&self) -> Option<&Window> {
         self.connection.window()
-    }
-
-    #[cfg(all(feature = "enable-winit", feature = "enable-glutin"))]
-    fn connection_from_window(window: WindowBuilder, events_loop: &EventsLoop)
-                              -> Result<Self::Connection, WinitConnectionError> {
-        Ok(Box::new(Interface::new(window, events_loop)))
     }
 
     #[cfg(all(feature = "enable-winit", feature = "enable-glutin"))]

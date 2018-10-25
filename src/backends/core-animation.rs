@@ -22,13 +22,13 @@ use std::ptr;
 use std::sync::Mutex;
 
 #[cfg(feature = "enable-winit")]
-use winit::{EventsLoop, Window, WindowBuilder};
+use winit::Window;
 #[cfg(feature = "enable-winit")]
 use winit::os::macos::WindowExt;
 
-use crate::{GLAPI, GLContextLayerBinding, LayerContainerInfo, LayerGeometryInfo, LayerId};
-use crate::{LayerMap, LayerParent, LayerSurfaceInfo, LayerTreeInfo, SurfaceOptions};
-use crate::{WinitConnectionError};
+use crate::{Connection, ConnectionError, GLAPI, GLContextLayerBinding, LayerContainerInfo};
+use crate::{LayerGeometryInfo, LayerId, LayerMap, LayerParent, LayerSurfaceInfo, LayerTreeInfo};
+use crate::{SurfaceOptions};
 
 #[allow(non_upper_case_globals)]
 const kCGLOGLPVersion_3_2_Core: CGLPixelFormatAttribute = 0x3200;
@@ -42,25 +42,26 @@ lazy_static! {
 pub struct Backend {
     native_component: LayerMap<NativeInfo>,
 
-    connection: Connection,
+    #[cfg(feature = "winit")]
+    window: Option<Window>,
 }
 
 impl crate::Backend for Backend {
-    type Connection = Connection;
+    type NativeConnection = ();
     type GLContext = GLContext;
     type NativeGLContext = CGLContextObj;
     type Host = id;
 
-    fn new(connection: Connection) -> Backend {
+    fn new(connection: Connection<Self::NativeConnection>) -> Result<Backend, ConnectionError> {
         let identifier = CFString::from(OPENGL_FRAMEWORK_IDENTIFIER);
         let bundle = CFBundle::bundle_with_identifier(identifier).unwrap();
         gl::load_with(move |name| bundle.function_pointer_for_name(CFString::from(name)));
 
-        Backend {
+        Ok(Backend {
             native_component: LayerMap::new(),
 
-            connection,
-        }
+            window: connection.into_window(),
+        })
     }
 
     // TODO(pcwalton): Options.
@@ -285,13 +286,7 @@ impl crate::Backend for Backend {
 
     #[cfg(feature = "enable-winit")]
     fn window(&self) -> Option<&Window> {
-        self.connection.window.as_ref()
-    }
-
-    #[cfg(feature = "enable-winit")]
-    fn connection_from_window(window: WindowBuilder, events_loop: &EventsLoop)
-                              -> Result<Connection, WinitConnectionError> {
-        Ok(Connection::new(Some(window.build(events_loop).unwrap())))
+        self.window.as_ref()
     }
 
     #[cfg(feature = "enable-winit")]
@@ -397,24 +392,6 @@ impl Backend {
         }
     }
 }
-
-#[cfg(feature = "enable-winit")]
-pub struct Connection {
-    window: Option<Window>,
-}
-
-#[cfg(feature = "enable-winit")]
-impl Connection {
-    #[inline]
-    fn new(window: Option<Window>) -> Connection {
-        Connection {
-            window,
-        }
-    }
-}
-
-#[cfg(not(feature = "enable-winit"))]
-pub struct Connection;
 
 pub struct GLContext {
     cgl_context: CGLContextObj,

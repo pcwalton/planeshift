@@ -7,14 +7,14 @@ extern crate winit;
 
 use euclid::{Point2D, Rect, Size2D};
 use gl::types::GLint;
-use planeshift::{LayerContext, SurfaceOptions};
+use planeshift::{Connection, LayerContext, SurfaceOptions};
 use winit::{ControlFlow, Event, EventsLoop, WindowBuilder, WindowEvent};
 
 pub fn main() {
     let mut event_loop = EventsLoop::new();
     let window = WindowBuilder::new().with_title("planeshift minimal example");
 
-    let mut context = LayerContext::from_window(window, &event_loop).unwrap();
+    let mut context = LayerContext::new(Connection::Winit(window, &event_loop)).unwrap();
     context.begin_transaction();
 
     let layer = context.add_surface_layer();

@@ -8,11 +8,10 @@
 use euclid::Rect;
 
 #[cfg(feature = "enable-winit")]
-use winit::{EventsLoop, Window, WindowBuilder};
+use winit::Window;
 
-use crate::{GLAPI, GLContextLayerBinding, LayerId, LayerMap, LayerContainerInfo};
-use crate::{LayerGeometryInfo, LayerSurfaceInfo, LayerTreeInfo, SurfaceOptions};
-use crate::{WinitConnectionError};
+use crate::{Connection, ConnectionError, GLAPI, GLContextLayerBinding, LayerContainerInfo};
+use crate::{LayerGeometryInfo, LayerId, LayerMap, LayerSurfaceInfo, LayerTreeInfo, SurfaceOptions};
 
 pub enum Backend<A, B> where A: crate::Backend, B: crate::Backend {
     A(A),
@@ -20,16 +19,32 @@ pub enum Backend<A, B> where A: crate::Backend, B: crate::Backend {
 }
 
 impl<A, B> crate::Backend for Backend<A, B> where A: crate::Backend, B: crate::Backend {
-    type Connection = Connection<A, B>;
+    type NativeConnection = NativeConnection<A, B>;
     type GLContext = GLContext<A, B>;
     type NativeGLContext = NativeGLContext<A, B>;
     type Host = Host<A, B>;
 
     // Constructor
-    fn new(connection: Self::Connection) -> Self {
+    fn new(connection: Connection<Self::NativeConnection>) -> Result<Self, ConnectionError> {
         match connection {
-            Connection::A(connection) => Backend::A(A::new(connection)),
-            Connection::B(connection) => Backend::B(B::new(connection)),
+            Connection::Native(NativeConnection::A(native_connection)) => {
+                Ok(Backend::A(A::new(Connection::Native(native_connection))?))
+            }
+            Connection::Native(NativeConnection::B(native_connection)) => {
+                Ok(Backend::B(B::new(Connection::Native(native_connection))?))
+            }
+            #[cfg(feature = "enable-winit")]
+            Connection::Winit(window_builder, event_loop) => {
+                match A::new(Connection::Winit(window_builder, event_loop)) {
+                    Ok(backend) => Ok(Backend::A(backend)),
+                    Err(err) => {
+                        match B::new(Connection::Winit(err.window_builder.unwrap(), event_loop)) {
+                            Ok(backend) => Ok(Backend::B(backend)),
+                            Err(err) => Err(err),
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -304,17 +319,6 @@ impl<A, B> crate::Backend for Backend<A, B> where A: crate::Backend, B: crate::B
     }
 
     #[cfg(feature = "enable-winit")]
-    fn connection_from_window(window: WindowBuilder, events_loop: &EventsLoop)
-                              -> Result<Self::Connection, WinitConnectionError> {
-        match A::connection_from_window(window, events_loop) {
-            Ok(connection) => Ok(Connection::A(connection)),
-            Err(err) => {
-                Ok(Connection::B(B::connection_from_window(err.window_builder, events_loop)?))
-            }
-        }
-    }
-
-    #[cfg(feature = "enable-winit")]
     fn host_layer_in_window(&mut self,
                             layer: LayerId,
                             tree_component: &LayerMap<LayerTreeInfo>,
@@ -338,9 +342,9 @@ impl<A, B> crate::Backend for Backend<A, B> where A: crate::Backend, B: crate::B
     }
 }
 
-pub enum Connection<A, B> where A: crate::Backend, B: crate::Backend {
-    A(A::Connection),
-    B(B::Connection),
+pub enum NativeConnection<A, B> where A: crate::Backend, B: crate::Backend {
+    A(A::NativeConnection),
+    B(B::NativeConnection),
 }
 
 pub enum GLContext<A, B> where A: crate::Backend, B: crate::Backend {

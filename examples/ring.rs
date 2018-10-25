@@ -8,7 +8,7 @@ extern crate winit;
 
 use euclid::{Point2D, Rect, Size2D};
 use gl::types::{GLboolean, GLchar, GLint, GLsizei, GLsizeiptr, GLuint};
-use planeshift::{GLAPI, LayerContext, SurfaceOptions};
+use planeshift::{Connection, GLAPI, LayerContext, SurfaceOptions};
 use std::f32;
 use std::os::raw::c_void;
 use std::sync::Arc;
@@ -71,7 +71,7 @@ pub fn main() {
     let window = WindowBuilder::new();
 
     // Create a `planeshift` context.
-    let mut context = LayerContext::from_window(window, &event_loop).unwrap();
+    let mut context = LayerContext::new(Connection::Winit(window, &event_loop)).unwrap();
     context.begin_transaction();
 
     // Get our size.
