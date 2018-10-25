@@ -27,8 +27,8 @@ use winit::Window;
 #[cfg(all(feature = "enable-winit", target_family = "windows"))]
 use winit::os::windows::WindowExt;
 
-use crate::{GLContextLayerBinding, GLContextOptions, LayerContainerInfo, LayerGeometryInfo};
-use crate::{LayerId, LayerMap, LayerTreeInfo};
+use crate::{Connection, ConnectionError, GLAPI, GLContextLayerBinding, LayerContainerInfo};
+use crate::{LayerGeometryInfo, LayerId, LayerMap, LayerSurfaceInfo, LayerTreeInfo, SurfaceOptions};
 use self::com::ComPtr;
 
 pub struct Backend {
@@ -40,18 +40,23 @@ pub struct Backend {
 
     egl_device: EGLDeviceEXT,
     egl_display: EGLDisplay,
+
+    #[cfg(feature = "enable-winit")]
+    window: Option<Window>,
 }
 
 impl crate::Backend for Backend {
-    type Connection = *mut ID3D11Device;
+    type NativeConnection = *mut ID3D11Device;
     type GLContext = GLContext;
     type NativeGLContext = EGLContext;
     type Host = HWND;
 
-    // FIXME(pcwalton): We should make sure this pointer is valid!
+    // FIXME(pcwalton): We should make sure the `ID3D11Device` pointer is valid!
     // TODO(pcwalton): Don't panic on error.
-    fn new(d3d_device: *mut ID3D11Device) -> Backend {
+    fn new(connection: Connection<Self::NativeConnection>) -> Result<Backend, ConnectionError> {
         unsafe {
+            // Unpack the connection.
+            let (d3d_device, window) = unpack_connection(connection);
             assert!(!d3d_device.is_null());
 
             // Create the DirectComposition device.
@@ -100,7 +105,7 @@ impl crate::Backend for Backend {
             // Load GL functions.
             gl::load_with(egl::get_proc_address);
 
-            Backend {
+            Ok(Backend {
                 native_component: LayerMap::new(),
 
                 d3d_device,
@@ -109,16 +114,19 @@ impl crate::Backend for Backend {
 
                 egl_device,
                 egl_display,
-            }
+
+                #[cfg(feature = "enable-winit")]
+                window,
+            })
         }
     }
 
-    fn create_gl_context(&mut self, options: GLContextOptions) -> Result<GLContext, ()> {
+    fn create_gl_context(&mut self, options: SurfaceOptions) -> Result<GLContext, ()> {
         unsafe {
             // Enumerate the EGL pixel configurations for ANGLE.
             let (mut configs, mut num_configs) = ([ptr::null(); 64], 0);
-            let depth_size = if options.contains(GLContextOptions::DEPTH) { 16 } else { 0 };
-            let stencil_size = if options.contains(GLContextOptions::STENCIL) { 8 } else { 0 };
+            let depth_size = if options.contains(SurfaceOptions::DEPTH) { 16 } else { 0 };
+            let stencil_size = if options.contains(SurfaceOptions::STENCIL) { 8 } else { 0 };
             let attributes = [
                 egl::ffi::SURFACE_TYPE as i32,      egl::ffi::WINDOW_BIT as i32,
                 egl::ffi::RENDERABLE_TYPE as i32,   egl::ffi::OPENGL_ES3_BIT as i32,
@@ -191,9 +199,17 @@ impl crate::Backend for Backend {
         })
     }
 
+    fn gl_api(&self) -> GLAPI {
+        GLAPI::GLES
+    }
+
     fn begin_transaction(&self) {}
 
-    fn end_transaction(&self) {
+    fn end_transaction(&mut self,
+                       _: &LayerMap<LayerTreeInfo>,
+                       _: &LayerMap<LayerContainerInfo>,
+                       _: &LayerMap<LayerGeometryInfo>,
+                       _: &LayerMap<LayerSurfaceInfo>) {
         unsafe {
             let result = (**self.dcomp_device).Commit();
             assert_eq!(result, S_OK);
@@ -241,7 +257,11 @@ impl crate::Backend for Backend {
         }
     }
 
-    fn remove_from_superlayer(&mut self, layer: LayerId, parent: LayerId) {
+    fn remove_from_superlayer(&mut self,
+                              layer: LayerId,
+                              parent: LayerId,
+                              _: &LayerMap<LayerTreeInfo>,
+                              _: &LayerMap<LayerGeometryInfo>) {
         unsafe {
             let parent_visual = match self.native_component.get(parent) {
                 None => return,
@@ -277,6 +297,7 @@ impl crate::Backend for Backend {
 
     fn set_layer_bounds(&mut self,
                         layer: LayerId,
+                        _: &Rect<f32>,
                         _: &LayerMap<LayerTreeInfo>,
                         _: &LayerMap<LayerContainerInfo>,
                         geometry_component: &LayerMap<LayerGeometryInfo>) {
@@ -292,12 +313,13 @@ impl crate::Backend for Backend {
         }
     }
 
-    fn set_layer_opaque(&mut self, _: LayerId, _: bool) {}
+    fn set_layer_surface_options(&mut self, _: LayerId, _: &LayerMap<LayerSurfaceInfo>) {}
 
     fn bind_layer_to_gl_context(&mut self,
                                 layer: LayerId,
                                 context: &mut GLContext,
-                                geometry_component: &LayerMap<LayerGeometryInfo>)
+                                geometry_component: &LayerMap<LayerGeometryInfo>,
+                                _: &LayerMap<LayerSurfaceInfo>)
                                 -> Result<GLContextLayerBinding, ()> {
         let native_component = &mut self.native_component[layer];
         let bounds = &geometry_component[layer].bounds;
@@ -384,8 +406,13 @@ impl crate::Backend for Backend {
         }
     }
 
-    fn present_gl_context(&mut self, binding: GLContextLayerBinding, _: &Rect<f32>)
+    fn present_gl_context(&mut self,
+                          binding: GLContextLayerBinding,
+                          _: &Rect<f32>,
+                          _: &LayerMap<LayerTreeInfo>,
+                          _: &LayerMap<LayerGeometryInfo>)
                           -> Result<(), ()> {
+        // TODO(pcwalton): Partial presents?
         unsafe {
             let surface = self.native_component[binding.layer].surface.as_ref().unwrap();
             if winerror::SUCCEEDED((**surface.dxgi_swap_chain).Present(0, 0)) {
@@ -399,49 +426,12 @@ impl crate::Backend for Backend {
     // `winit` integration
 
     #[cfg(feature = "enable-winit")]
-    fn connection_from_window(_: &winit::Window) -> *mut ID3D11Device {
-        unsafe {
-            let mut d3d_device: ComPtr<ID3D11Device> = ComPtr::null();
-            let result = d3d11::D3D11CreateDevice(ptr::null_mut(),
-                                                  D3D_DRIVER_TYPE_HARDWARE,
-                                                  ptr::null_mut(),
-                                                  D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                                                  ptr::null_mut(),
-                                                  0,
-                                                  D3D11_SDK_VERSION,
-                                                  &mut *d3d_device,
-                                                  &mut 0,
-                                                  ptr::null_mut());
-            assert_eq!(result, S_OK);
-            assert!(!d3d_device.is_null());
-
-            // Need at least D3D 10.1 for ES 3.
-            if (**d3d_device).GetFeatureLevel() >= D3D_FEATURE_LEVEL_10_1 {
-                return d3d_device.copy()
-            }
-
-            // TODO(pcwalton): Allow the user to opt-out of the WARP fallback.
-            d3d_device = ComPtr::null();
-            let result = d3d11::D3D11CreateDevice(ptr::null_mut(),
-                                                  D3D_DRIVER_TYPE_WARP,
-                                                  ptr::null_mut(),
-                                                  D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                                                  ptr::null_mut(),
-                                                  0,
-                                                  D3D11_SDK_VERSION,
-                                                  &mut *d3d_device,
-                                                  &mut 0,
-                                                  ptr::null_mut());
-            assert_eq!(result, S_OK);
-            assert!(!d3d_device.is_null());
-
-            d3d_device.copy()
-        }
+    fn window(&self) -> Option<&Window> {
+        self.window.as_ref()
     }
 
     #[cfg(feature = "enable-winit")]
     fn host_layer_in_window(&mut self,
-                            window: &Window,
                             layer: LayerId,
                             tree_component: &LayerMap<LayerTreeInfo>,
                             container_component: &LayerMap<LayerContainerInfo>,
@@ -449,7 +439,7 @@ impl crate::Backend for Backend {
                             -> Result<(), ()> {
         unsafe {
             self.host_layer(layer,
-                            window.get_hwnd() as HWND,
+                            self.window.as_ref().unwrap().get_hwnd() as HWND,
                             tree_component,
                             container_component,
                             geometry_component);
@@ -491,6 +481,59 @@ impl Drop for GLContext {
         unsafe {
             let result = egl::ffi::DestroyContext(self.egl_display, self.egl_context);
             assert_eq!(result, egl::ffi::TRUE);
+        }
+    }
+}
+
+#[cfg(not(feature = "enable-winit"))]
+type MaybeWindow = ();
+#[cfg(feature = "enable-winit")]
+type MaybeWindow = Window;
+
+fn unpack_connection(connection: Connection<*mut ID3D11Device>)
+                     -> (*mut ID3D11Device, Option<MaybeWindow>) {
+    match connection {
+        Connection::Native(d3d_device) => (d3d_device, None),
+        #[cfg(feature = "enable-winit")]
+        Connection::Winit(window_builder, event_loop) => {
+            let window = window_builder.build(event_loop).unwrap();
+            unsafe {
+                let mut d3d_device: ComPtr<ID3D11Device> = ComPtr::null();
+                let result = d3d11::D3D11CreateDevice(ptr::null_mut(),
+                                                      D3D_DRIVER_TYPE_HARDWARE,
+                                                      ptr::null_mut(),
+                                                      D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                                                      ptr::null_mut(),
+                                                      0,
+                                                      D3D11_SDK_VERSION,
+                                                      &mut *d3d_device,
+                                                      &mut 0,
+                                                      ptr::null_mut());
+                assert_eq!(result, S_OK);
+                assert!(!d3d_device.is_null());
+
+                // Need at least D3D 10.1 for ES 3.
+                if (**d3d_device).GetFeatureLevel() >= D3D_FEATURE_LEVEL_10_1 {
+                    return (d3d_device.copy(), Some(window))
+                }
+
+                // TODO(pcwalton): Allow the user to opt-out of the WARP fallback.
+                d3d_device = ComPtr::null();
+                let result = d3d11::D3D11CreateDevice(ptr::null_mut(),
+                                                      D3D_DRIVER_TYPE_WARP,
+                                                      ptr::null_mut(),
+                                                      D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                                                      ptr::null_mut(),
+                                                      0,
+                                                      D3D11_SDK_VERSION,
+                                                      &mut *d3d_device,
+                                                      &mut 0,
+                                                      ptr::null_mut());
+                assert_eq!(result, S_OK);
+                assert!(!d3d_device.is_null());
+
+                (d3d_device.copy(), Some(window))
+            }
         }
     }
 }
