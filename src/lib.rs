@@ -2,6 +2,7 @@
 
 extern crate euclid;
 extern crate gl;
+extern crate image;
 extern crate tempfile;
 
 #[macro_use]
@@ -18,6 +19,8 @@ extern crate wayland_client;
 #[macro_use]
 extern crate wayland_sys;
 
+#[cfg(target_os = "macos")]
+extern crate block;
 #[cfg(target_os = "macos")]
 extern crate cgl;
 #[cfg(target_os = "macos")]
@@ -39,9 +42,11 @@ extern crate winapi;
 
 use euclid::Rect;
 use gl::types::GLuint;
+use image::RgbaImage;
 use std::fmt::{self, Debug, Formatter};
 use std::mem;
 use std::ops::{Index, IndexMut};
+use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "enable-winit")]
 use winit::{EventsLoop, Window, WindowBuilder};
@@ -72,7 +77,7 @@ mod egl {
 
 pub struct LayerContext<B = backends::default::Backend> where B: Backend {
     next_layer_id: LayerId,
-    transaction_level: u32,
+    transaction: Option<TransactionInfo>,
 
     tree_component: LayerMap<LayerTreeInfo>,
     container_component: LayerMap<LayerContainerInfo>,
@@ -109,6 +114,7 @@ pub trait Backend: Sized {
     // Transactions
     fn begin_transaction(&self);
     fn end_transaction(&mut self,
+                       promise: &TransactionPromise,
                        tree_component: &LayerMap<LayerTreeInfo>,
                        container_component: &LayerMap<LayerContainerInfo>,
                        geometry_component: &LayerMap<LayerGeometryInfo>,
@@ -169,11 +175,18 @@ pub trait Backend: Sized {
                           geometry_component: &LayerMap<LayerGeometryInfo>)
                           -> Result<(), ()>;
 
-    // `winit` integration
+    // Screenshots
+    fn screenshot_hosted_layer(&mut self,
+                               layer: LayerId,
+                               tree_component: &LayerMap<LayerTreeInfo>,
+                               container_component: &LayerMap<LayerContainerInfo>,
+                               geometry_component: &LayerMap<LayerGeometryInfo>,
+                               surface_component: &LayerMap<LayerSurfaceInfo>)
+                               -> RgbaImage;
 
+    // `winit` integration
     #[cfg(feature = "enable-winit")]
     fn window(&self) -> Option<&Window>;
-
     #[cfg(feature = "enable-winit")]
     fn host_layer_in_window(&mut self,
                             layer: LayerId,
@@ -208,6 +221,11 @@ pub struct GLContextLayerBinding {
 pub enum GLAPI {
     GL,
     GLES,
+}
+
+#[derive(Clone)]
+pub struct TransactionPromise {
+    on_fulfilled: Arc<Mutex<Vec<Box<dyn FnMut()>>>>,
 }
 
 // Components
@@ -254,7 +272,7 @@ impl<B> LayerContext<B> where B: Backend {
             backend: Backend::new(connection)?,
 
             next_layer_id: LayerId(0),
-            transaction_level: 0,
+            transaction: None,
 
             tree_component: LayerMap::new(),
             container_component: LayerMap::new(),
@@ -281,26 +299,44 @@ impl<B> LayerContext<B> where B: Backend {
     // Transactions
 
     pub fn begin_transaction(&mut self) {
-        self.transaction_level += 1;
-
-        if self.transaction_level == 1 {
-            self.backend.begin_transaction();
+        match self.transaction {
+            None => {
+                self.transaction = Some(TransactionInfo {
+                    level: 1,
+                    promise: TransactionPromise::new(),
+                });
+                self.backend.begin_transaction();
+            }
+            Some(ref mut transaction) => {
+                transaction.level += 1;
+            }
         }
     }
 
-    pub fn end_transaction(&mut self) {
-        self.transaction_level -= 1;
-
-        if self.transaction_level == 0 {
-            self.backend.end_transaction(&self.tree_component,
-                                         &self.container_component,
-                                         &self.geometry_component,
-                                         &self.surface_component);
+    pub fn end_transaction(&mut self) -> TransactionPromise {
+        {
+            let transaction = self.transaction
+                                  .as_mut()
+                                  .expect("end_transaction(): Not in a transaction!");
+            transaction.level -= 1;
+            if transaction.level > 0 {
+                return transaction.promise.clone()
+            }
         }
+
+        // If we got here, we're done with the transaction.
+        let transaction = self.transaction.take().unwrap();
+        self.backend.end_transaction(&transaction.promise,
+                                     &self.tree_component,
+                                     &self.container_component,
+                                     &self.geometry_component,
+                                     &self.surface_component);
+        transaction.promise
     }
 
+    #[inline]
     fn in_transaction(&self) -> bool {
-        self.transaction_level > 0
+        self.transaction.is_some()
     }
 
     // Layer tree management system
@@ -501,6 +537,19 @@ impl<B> LayerContext<B> where B: Backend {
                                         &self.geometry_component)
     }
 
+    // Screenshots
+
+    pub fn screenshot_hosted_layer(&mut self, layer: LayerId) -> RgbaImage {
+        debug_assert!(!self.in_transaction());
+        assert_eq!(self.tree_component[layer].parent, LayerParent::NativeHost);
+
+        self.backend.screenshot_hosted_layer(layer,
+                                             &self.tree_component,
+                                             &self.container_component,
+                                             &self.geometry_component,
+                                             &self.surface_component)
+    }
+
     // `winit` integration
 
     #[cfg(feature = "enable-winit")]
@@ -554,6 +603,31 @@ impl ConnectionError {
             window_builder: None,
         }
     }
+}
+
+// Promise infrastructure
+
+impl TransactionPromise {
+    fn new() -> TransactionPromise {
+        TransactionPromise {
+            on_fulfilled: Arc::new(Mutex::new(vec![])),
+        }
+    }
+
+    pub fn then(&self, on_fulfilled: Box<FnMut()>) {
+        self.on_fulfilled.lock().unwrap().push(on_fulfilled)
+    }
+
+    fn resolve(&self) {
+        for mut on_fulfilled in mem::replace(&mut *self.on_fulfilled.lock().unwrap(), vec![]) {
+            on_fulfilled()
+        }
+    }
+}
+
+struct TransactionInfo {
+    level: u32,
+    promise: TransactionPromise,
 }
 
 // Entity-component system infrastructure

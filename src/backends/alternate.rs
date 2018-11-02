@@ -6,12 +6,14 @@
 //! two backends can be chained together by making backend A or backend B itself a `Chain`.
 
 use euclid::Rect;
+use image::RgbaImage;
 
 #[cfg(feature = "enable-winit")]
 use winit::Window;
 
 use crate::{Connection, ConnectionError, GLAPI, GLContextLayerBinding, LayerContainerInfo};
 use crate::{LayerGeometryInfo, LayerId, LayerMap, LayerSurfaceInfo, LayerTreeInfo, SurfaceOptions};
+use crate::{TransactionPromise};
 
 pub enum Backend<A, B> where A: crate::Backend, B: crate::Backend {
     A(A),
@@ -25,6 +27,7 @@ impl<A, B> crate::Backend for Backend<A, B> where A: crate::Backend, B: crate::B
     type Host = Host<A, B>;
 
     // Constructor
+
     fn new(connection: Connection<Self::NativeConnection>) -> Result<Self, ConnectionError> {
         match connection {
             Connection::Native(NativeConnection::A(native_connection)) => {
@@ -49,6 +52,7 @@ impl<A, B> crate::Backend for Backend<A, B> where A: crate::Backend, B: crate::B
     }
 
     // OpenGL context creation
+
     fn create_gl_context(&mut self, options: SurfaceOptions) -> Result<Self::GLContext, ()> {
         match *self {
             Backend::A(ref mut this) => Ok(GLContext::A(this.create_gl_context(options)?)),
@@ -99,19 +103,22 @@ impl<A, B> crate::Backend for Backend<A, B> where A: crate::Backend, B: crate::B
     }
 
     fn end_transaction(&mut self,
+                       promise: &TransactionPromise,
                        tree_component: &LayerMap<LayerTreeInfo>,
                        container_component: &LayerMap<LayerContainerInfo>,
                        geometry_component: &LayerMap<LayerGeometryInfo>,
                        surface_component: &LayerMap<LayerSurfaceInfo>) {
         match *self {
             Backend::A(ref mut this) => {
-                this.end_transaction(tree_component,
+                this.end_transaction(promise,
+                                     tree_component,
                                      container_component,
                                      geometry_component,
                                      surface_component)
             }
             Backend::B(ref mut this) => {
-                this.end_transaction(tree_component,
+                this.end_transaction(promise,
+                                     tree_component,
                                      container_component,
                                      geometry_component,
                                      surface_component)
@@ -188,7 +195,6 @@ impl<A, B> crate::Backend for Backend<A, B> where A: crate::Backend, B: crate::B
 
     // Native hosting
 
-
     unsafe fn host_layer(&mut self,
                          layer: LayerId,
                          host: Self::Host,
@@ -232,6 +238,7 @@ impl<A, B> crate::Backend for Backend<A, B> where A: crate::Backend, B: crate::B
     }
 
     // Geometry
+
     fn set_layer_bounds(&mut self,
                         layer: LayerId,
                         old_bounds: &Rect<f32>,
@@ -264,6 +271,33 @@ impl<A, B> crate::Backend for Backend<A, B> where A: crate::Backend, B: crate::B
         match *self {
             Backend::A(ref mut this) => this.set_layer_surface_options(layer, surface_component),
             Backend::B(ref mut this) => this.set_layer_surface_options(layer, surface_component),
+        }
+    }
+
+    // Screenshots
+
+    fn screenshot_hosted_layer(&mut self,
+                               layer: LayerId,
+                               tree_component: &LayerMap<LayerTreeInfo>,
+                               container_component: &LayerMap<LayerContainerInfo>,
+                               geometry_component: &LayerMap<LayerGeometryInfo>,
+                               surface_component: &LayerMap<LayerSurfaceInfo>)
+                               -> RgbaImage {
+        match *self {
+            Backend::A(ref mut this) => {
+                this.screenshot_hosted_layer(layer,
+                                             tree_component,
+                                             container_component,
+                                             geometry_component,
+                                             surface_component)
+            }
+            Backend::B(ref mut this) => {
+                this.screenshot_hosted_layer(layer,
+                                             tree_component,
+                                             container_component,
+                                             geometry_component,
+                                             surface_component)
+            }
         }
     }
 

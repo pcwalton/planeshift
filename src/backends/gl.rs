@@ -5,6 +5,7 @@
 use euclid::{Point2D, Rect, Size2D};
 use gl::types::{GLchar, GLint, GLuint, GLvoid};
 use gl;
+use image::RgbaImage;
 use std::os::raw::c_void;
 use std::ptr;
 
@@ -15,7 +16,7 @@ use winit::{EventsLoop, Window, WindowBuilder};
 
 use crate::{Connection, ConnectionError, GLAPI, GLContextLayerBinding, LayerContainerInfo};
 use crate::{LayerGeometryInfo, LayerId, LayerMap, LayerParent, LayerSurfaceInfo, LayerTreeInfo};
-use crate::{SurfaceOptions};
+use crate::{SurfaceOptions, TransactionPromise};
 
 // FIXME(pcwalton): Clean up GL resources in destructor.
 pub struct Backend {
@@ -146,6 +147,7 @@ impl crate::Backend for Backend {
     }
 
     fn end_transaction(&mut self,
+                       promise: &TransactionPromise,
                        tree_component: &LayerMap<LayerTreeInfo>,
                        container_component: &LayerMap<LayerContainerInfo>,
                        geometry_component: &LayerMap<LayerGeometryInfo>,
@@ -206,6 +208,7 @@ impl crate::Backend for Backend {
         }
 
         self.dirty_rect = None;
+        promise.resolve();
     }
 
     // Layer creation and destruction
@@ -274,6 +277,7 @@ impl crate::Backend for Backend {
     }
 
     // Geometry
+
     fn set_layer_bounds(&mut self,
                         layer: LayerId,
                         old_bounds: &Rect<f32>,
@@ -415,6 +419,18 @@ impl crate::Backend for Backend {
         self.invalidate_layer(binding.layer, dirty_rect, tree_component, geometry_component);
 
         Ok(())
+    }
+
+    // Screenshots
+
+    fn screenshot_hosted_layer(&mut self,
+                               _: LayerId,
+                               _: &LayerMap<LayerTreeInfo>,
+                               _: &LayerMap<LayerContainerInfo>,
+                               _: &LayerMap<LayerGeometryInfo>,
+                               _: &LayerMap<LayerSurfaceInfo>)
+                               -> RgbaImage {
+        unimplemented!()
     }
 
     // `winit` integration

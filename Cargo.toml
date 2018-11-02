@@ -23,6 +23,11 @@ gl = "0.6"
 lazy_static = "1.1"
 tempfile = "3.0"
 
+[dependencies.image]
+version = "0.20"
+default-features = false
+features = ["png_codec"]
+
 [dependencies.winit]
 version = "0.17"
 optional = true
@@ -40,6 +45,7 @@ version = "0.20"
 features = ["client", "egl"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
+block = "0.1"
 cgl = "0.2"
 objc = "0.2"
 
