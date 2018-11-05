@@ -114,7 +114,7 @@ pub trait Backend: Sized {
     // Transactions
     fn begin_transaction(&self);
     fn end_transaction(&mut self,
-                       promise: &TransactionPromise,
+                       promise: &Promise<()>,
                        tree_component: &LayerMap<LayerTreeInfo>,
                        container_component: &LayerMap<LayerContainerInfo>,
                        geometry_component: &LayerMap<LayerGeometryInfo>,
@@ -178,11 +178,12 @@ pub trait Backend: Sized {
     // Screenshots
     fn screenshot_hosted_layer(&mut self,
                                layer: LayerId,
+                               transaction_promise: &Promise<()>,
                                tree_component: &LayerMap<LayerTreeInfo>,
                                container_component: &LayerMap<LayerContainerInfo>,
                                geometry_component: &LayerMap<LayerGeometryInfo>,
                                surface_component: &LayerMap<LayerSurfaceInfo>)
-                               -> RgbaImage;
+                               -> Promise<RgbaImage>;
 
     // `winit` integration
     #[cfg(feature = "enable-winit")]
@@ -224,9 +225,7 @@ pub enum GLAPI {
 }
 
 #[derive(Clone)]
-pub struct TransactionPromise {
-    on_fulfilled: Arc<Mutex<Vec<Box<dyn FnMut()>>>>,
-}
+pub struct Promise<T>(Arc<Mutex<PromiseData<T>>>) where T: Clone;
 
 // Components
 
@@ -259,6 +258,11 @@ pub struct LayerSurfaceInfo {
 pub enum LayerParent {
     Layer(LayerId),
     NativeHost,
+}
+
+struct PromiseData<T> where T: Clone {
+    on_fulfilled: Vec<Box<dyn FnMut(T)>>,
+    result: Option<T>,
 }
 
 // Public API for the context
@@ -303,7 +307,7 @@ impl<B> LayerContext<B> where B: Backend {
             None => {
                 self.transaction = Some(TransactionInfo {
                     level: 1,
-                    promise: TransactionPromise::new(),
+                    promise: Promise::new(),
                 });
                 self.backend.begin_transaction();
             }
@@ -313,14 +317,14 @@ impl<B> LayerContext<B> where B: Backend {
         }
     }
 
-    pub fn end_transaction(&mut self) -> TransactionPromise {
+    pub fn end_transaction(&mut self) {
         {
             let transaction = self.transaction
                                   .as_mut()
                                   .expect("end_transaction(): Not in a transaction!");
             transaction.level -= 1;
             if transaction.level > 0 {
-                return transaction.promise.clone()
+                return
             }
         }
 
@@ -331,7 +335,6 @@ impl<B> LayerContext<B> where B: Backend {
                                      &self.container_component,
                                      &self.geometry_component,
                                      &self.surface_component);
-        transaction.promise
     }
 
     #[inline]
@@ -539,11 +542,13 @@ impl<B> LayerContext<B> where B: Backend {
 
     // Screenshots
 
-    pub fn screenshot_hosted_layer(&mut self, layer: LayerId) -> RgbaImage {
-        debug_assert!(!self.in_transaction());
+    pub fn screenshot_hosted_layer(&mut self, layer: LayerId) -> Promise<RgbaImage> {
+        debug_assert!(self.in_transaction());
         assert_eq!(self.tree_component[layer].parent, LayerParent::NativeHost);
 
+        let transaction_promise = self.transaction.as_ref().unwrap().promise.clone();
         self.backend.screenshot_hosted_layer(layer,
+                                             &transaction_promise,
                                              &self.tree_component,
                                              &self.container_component,
                                              &self.geometry_component,
@@ -607,27 +612,34 @@ impl ConnectionError {
 
 // Promise infrastructure
 
-impl TransactionPromise {
-    fn new() -> TransactionPromise {
-        TransactionPromise {
-            on_fulfilled: Arc::new(Mutex::new(vec![])),
+impl<T> Promise<T> where T: Clone {
+    fn new() -> Promise<T> {
+        Promise(Arc::new(Mutex::new(PromiseData {
+            on_fulfilled: vec![],
+            result: None,
+        })))
+    }
+
+    pub fn then(&self, mut on_fulfilled: Box<FnMut(T)>) {
+        let mut this = self.0.lock().unwrap();
+        match this.result {
+            Some(ref result) => on_fulfilled((*result).clone()),
+            None => this.on_fulfilled.push(on_fulfilled),
         }
     }
 
-    pub fn then(&self, on_fulfilled: Box<FnMut()>) {
-        self.on_fulfilled.lock().unwrap().push(on_fulfilled)
-    }
-
-    fn resolve(&self) {
-        for mut on_fulfilled in mem::replace(&mut *self.on_fulfilled.lock().unwrap(), vec![]) {
-            on_fulfilled()
+    fn resolve(&self, result: T) {
+        let mut this = self.0.lock().unwrap();
+        this.result = Some(result.clone());
+        for mut on_fulfilled in this.on_fulfilled.drain(..) {
+            on_fulfilled(result.clone())
         }
     }
 }
 
 struct TransactionInfo {
     level: u32,
-    promise: TransactionPromise,
+    promise: Promise<()>,
 }
 
 // Entity-component system infrastructure

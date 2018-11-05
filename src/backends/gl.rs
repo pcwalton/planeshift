@@ -16,7 +16,7 @@ use winit::{EventsLoop, Window, WindowBuilder};
 
 use crate::{Connection, ConnectionError, GLAPI, GLContextLayerBinding, LayerContainerInfo};
 use crate::{LayerGeometryInfo, LayerId, LayerMap, LayerParent, LayerSurfaceInfo, LayerTreeInfo};
-use crate::{SurfaceOptions, TransactionPromise};
+use crate::{Promise, SurfaceOptions};
 
 // FIXME(pcwalton): Clean up GL resources in destructor.
 pub struct Backend {
@@ -147,7 +147,7 @@ impl crate::Backend for Backend {
     }
 
     fn end_transaction(&mut self,
-                       promise: &TransactionPromise,
+                       promise: &Promise<()>,
                        tree_component: &LayerMap<LayerTreeInfo>,
                        container_component: &LayerMap<LayerContainerInfo>,
                        geometry_component: &LayerMap<LayerGeometryInfo>,
@@ -208,7 +208,7 @@ impl crate::Backend for Backend {
         }
 
         self.dirty_rect = None;
-        promise.resolve();
+        promise.resolve(());
     }
 
     // Layer creation and destruction
@@ -425,11 +425,12 @@ impl crate::Backend for Backend {
 
     fn screenshot_hosted_layer(&mut self,
                                _: LayerId,
+                               _: &Promise<()>,
                                _: &LayerMap<LayerTreeInfo>,
                                _: &LayerMap<LayerContainerInfo>,
                                _: &LayerMap<LayerGeometryInfo>,
                                _: &LayerMap<LayerSurfaceInfo>)
-                               -> RgbaImage {
+                               -> Promise<RgbaImage> {
         unimplemented!()
     }
 

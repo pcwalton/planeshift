@@ -10,7 +10,7 @@ use gl::types::GLint;
 use planeshift::{Connection, LayerContext, SurfaceOptions};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use winit::{ControlFlow, Event, EventsLoop, WindowBuilder, WindowEvent};
+use winit::{ControlFlow, EventsLoop, WindowBuilder};
 
 pub fn main() {
     let mut event_loop = EventsLoop::new();
@@ -53,19 +53,19 @@ pub fn main() {
 
     // Present.
     let proxy = event_loop.create_proxy();
-    let ready_to_take_screenshot = Arc::new(AtomicBool::new(false));
+    let quit_event_loop = Arc::new(AtomicBool::new(false));
+    let quit = quit_event_loop.clone();
     context.present_gl_context(binding, &layer_rect).unwrap();
-    let x_ready_to_take_screenshot = ready_to_take_screenshot.clone();
-    context.end_transaction().then(Box::new(move || {
-        x_ready_to_take_screenshot.store(true, Ordering::SeqCst);
-        drop(proxy.wakeup())
+    context.screenshot_hosted_layer(layer).then(Box::new(move |image| {
+        image.save("screenshot.png").unwrap();
+        quit.store(true, Ordering::SeqCst);
+        drop(proxy.wakeup());
     }));
+    context.end_transaction();
 
     // Take a screenshot after the transaction finishes.
     event_loop.run_forever(|_| {
-        if ready_to_take_screenshot.load(Ordering::SeqCst) {
-            let image = context.screenshot_hosted_layer(layer);
-            image.save("screenshot.png").unwrap();
+        if quit_event_loop.load(Ordering::SeqCst) {
             ControlFlow::Break
         } else {
             ControlFlow::Continue

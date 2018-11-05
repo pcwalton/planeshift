@@ -12,8 +12,8 @@ use image::RgbaImage;
 use winit::Window;
 
 use crate::{Connection, ConnectionError, GLAPI, GLContextLayerBinding, LayerContainerInfo};
-use crate::{LayerGeometryInfo, LayerId, LayerMap, LayerSurfaceInfo, LayerTreeInfo, SurfaceOptions};
-use crate::{TransactionPromise};
+use crate::{LayerGeometryInfo, LayerId, LayerMap, LayerSurfaceInfo, LayerTreeInfo, Promise};
+use crate::{SurfaceOptions};
 
 pub enum Backend<A, B> where A: crate::Backend, B: crate::Backend {
     A(A),
@@ -103,7 +103,7 @@ impl<A, B> crate::Backend for Backend<A, B> where A: crate::Backend, B: crate::B
     }
 
     fn end_transaction(&mut self,
-                       promise: &TransactionPromise,
+                       promise: &Promise<()>,
                        tree_component: &LayerMap<LayerTreeInfo>,
                        container_component: &LayerMap<LayerContainerInfo>,
                        geometry_component: &LayerMap<LayerGeometryInfo>,
@@ -278,14 +278,16 @@ impl<A, B> crate::Backend for Backend<A, B> where A: crate::Backend, B: crate::B
 
     fn screenshot_hosted_layer(&mut self,
                                layer: LayerId,
+                               transaction_promise: &Promise<()>,
                                tree_component: &LayerMap<LayerTreeInfo>,
                                container_component: &LayerMap<LayerContainerInfo>,
                                geometry_component: &LayerMap<LayerGeometryInfo>,
                                surface_component: &LayerMap<LayerSurfaceInfo>)
-                               -> RgbaImage {
+                               -> Promise<RgbaImage> {
         match *self {
             Backend::A(ref mut this) => {
                 this.screenshot_hosted_layer(layer,
+                                             transaction_promise,
                                              tree_component,
                                              container_component,
                                              geometry_component,
@@ -293,6 +295,7 @@ impl<A, B> crate::Backend for Backend<A, B> where A: crate::Backend, B: crate::B
             }
             Backend::B(ref mut this) => {
                 this.screenshot_hosted_layer(layer,
+                                             transaction_promise,
                                              tree_component,
                                              container_component,
                                              geometry_component,

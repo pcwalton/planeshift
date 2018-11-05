@@ -32,7 +32,7 @@ use winit::os::macos::WindowExt;
 
 use crate::{Connection, ConnectionError, GLAPI, GLContextLayerBinding, LayerContainerInfo};
 use crate::{LayerGeometryInfo, LayerId, LayerMap, LayerParent, LayerSurfaceInfo, LayerTreeInfo};
-use crate::{SurfaceOptions, TransactionPromise};
+use crate::{Promise, SurfaceOptions};
 
 #[allow(non_upper_case_globals)]
 const kCGLOGLPVersion_3_2_Core: CGLPixelFormatAttribute = 0x3200;
@@ -111,14 +111,14 @@ impl crate::Backend for Backend {
     }
 
     fn end_transaction(&mut self,
-                       promise: &TransactionPromise,
+                       promise: &Promise<()>,
                        _: &LayerMap<LayerTreeInfo>,
                        _: &LayerMap<LayerContainerInfo>,
                        _: &LayerMap<LayerGeometryInfo>,
                        _: &LayerMap<LayerSurfaceInfo>) {
         let promise = Mutex::new(Some((*promise).clone()));
         transaction::set_completion_block(ConcreteBlock::new(move || {
-            (*promise.lock().unwrap()).take().unwrap().resolve()
+            (*promise.lock().unwrap()).take().unwrap().resolve(())
         }));
 
         transaction::commit();
@@ -296,45 +296,53 @@ impl crate::Backend for Backend {
 
     fn screenshot_hosted_layer(&mut self,
                                layer: LayerId,
+                               transaction_promise: &Promise<()>,
                                _: &LayerMap<LayerTreeInfo>,
                                _: &LayerMap<LayerContainerInfo>,
                                _: &LayerMap<LayerGeometryInfo>,
                                _: &LayerMap<LayerSurfaceInfo>)
-                               -> RgbaImage {
-        let image;
-        unsafe {
-            let hosting_view = self.native_component[layer].host;
-            let view_bounds: NSRect = msg_send![hosting_view, bounds];
-            let mut view_frame: NSRect =
-                msg_send![hosting_view, convertRect:view_bounds toView:nil];
+                               -> Promise<RgbaImage> {
+        let result_promise = Promise::new();
+        let result_promise_to_return = result_promise.clone();
 
-            let window: id = msg_send![hosting_view, window];
-            let window_id: CGWindowID = msg_send![window, windowNumber];
+        let hosting_view = self.native_component[layer].host;
+        transaction_promise.then(Box::new(move |()| {
+            let image;
+            unsafe {
+                let view_bounds: NSRect = msg_send![hosting_view, bounds];
+                let mut view_frame: NSRect =
+                    msg_send![hosting_view, convertRect:view_bounds toView:nil];
 
-            let window_frame: NSRect = msg_send![window, frame];
-            view_frame.origin.x += window_frame.origin.x;
-            view_frame.origin.y += window_frame.origin.y;
+                let window: id = msg_send![hosting_view, window];
+                let window_id: CGWindowID = msg_send![window, windowNumber];
 
-            let screen: id = msg_send![window, screen];
-            let screen_frame: NSRect = msg_send![screen, frame];
-            let screen_rect = CGRect::new(&CGPoint::new(view_frame.origin.x,
-                                                        screen_frame.size.height -
-                                                        view_frame.origin.y -
-                                                        view_frame.size.height),
-                                          &CGSize::new(view_frame.size.width,
-                                                       view_frame.size.height));
+                let window_frame: NSRect = msg_send![window, frame];
+                view_frame.origin.x += window_frame.origin.x;
+                view_frame.origin.y += window_frame.origin.y;
 
-            image = window::create_image(screen_rect,
-                                         kCGWindowListOptionAll,
-                                         window_id,
-                                         kCGWindowImageBoundsIgnoreFraming |
-                                         kCGWindowImageBestResolution).unwrap();
-        }
+                let screen: id = msg_send![window, screen];
+                let screen_frame: NSRect = msg_send![screen, frame];
+                let screen_rect = CGRect::new(&CGPoint::new(view_frame.origin.x,
+                                                            screen_frame.size.height -
+                                                            view_frame.origin.y -
+                                                            view_frame.size.height),
+                                            &CGSize::new(view_frame.size.width,
+                                                        view_frame.size.height));
 
-        let (width, height) = (image.width() as u32, image.height() as u32);
-        let mut data = image.data().bytes().to_vec();
-        data.chunks_mut(4).for_each(|pixel| pixel.swap(0, 2));
-        RgbaImage::from_vec(width, height, data).unwrap()
+                image = window::create_image(screen_rect,
+                                            kCGWindowListOptionAll,
+                                            window_id,
+                                            kCGWindowImageBoundsIgnoreFraming |
+                                            kCGWindowImageBestResolution).unwrap();
+            }
+
+            let (width, height) = (image.width() as u32, image.height() as u32);
+            let mut data = image.data().bytes().to_vec();
+            data.chunks_mut(4).for_each(|pixel| pixel.swap(0, 2));
+            result_promise.resolve(RgbaImage::from_vec(width, height, data).unwrap());
+        }));
+
+        result_promise_to_return
     }
 
     // `winit` integration
