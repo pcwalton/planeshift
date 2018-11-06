@@ -12,6 +12,8 @@ use std::ptr;
 use std::slice;
 use std::sync::mpsc::{self, Sender};
 use std::thread::Builder as ThreadBuilder;
+use std::thread;
+use std::time::Duration;
 use winapi::Interface;
 use winapi::shared::dxgi1_2::{DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_SCALING_STRETCH};
 use winapi::shared::dxgi1_2::{DXGI_SWAP_CHAIN_DESC1, IDXGIFactory2, IDXGISwapChain1};
@@ -19,7 +21,7 @@ use winapi::shared::dxgi::{DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, IDXGIAdapter, IDXGI
 use winapi::shared::dxgiformat::DXGI_FORMAT_B8G8R8A8_UNORM;
 use winapi::shared::dxgitype::{DXGI_SAMPLE_DESC, DXGI_USAGE_RENDER_TARGET_OUTPUT};
 use winapi::shared::minwindef::{DWORD, FALSE, LPARAM, LRESULT, TRUE, UINT, WORD, WPARAM};
-use winapi::shared::ntdef::LPCSTR;
+use winapi::shared::ntdef::{LPCSTR, PVOID};
 use winapi::shared::windef::{HBRUSH, HWND, RECT};
 use winapi::shared::winerror::{self, S_OK};
 use winapi::um::d3d11::{self, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, ID3D11Device};
@@ -489,8 +491,20 @@ impl crate::Backend for Backend {
 
         transaction_promise.then(Box::new(move |()| {
             unsafe {
-                // Try to bring the window to the front. This is best-effort.
-                winuser::SetForegroundWindow(window);
+                // Try to bring the window to the front.
+                if winuser::SetForegroundWindow(window) == FALSE {
+                    // We failed to bring the window to the front. Maybe the foreground lock
+                    // timeout hasn't expired yet. Let's wait and try again.
+                    let mut foreground_lock_timeout = 0;
+                    assert_ne!(winuser::SystemParametersInfoA(
+                                    winuser::SPI_GETFOREGROUNDLOCKTIMEOUT,
+                                    0,
+                                    &mut foreground_lock_timeout as *mut _ as PVOID,
+                                    0),
+                               FALSE);
+                    thread::sleep(Duration::from_millis(foreground_lock_timeout));
+                    assert_ne!(winuser::SetForegroundWindow(window), FALSE);
+                }
 
                 // Wake up our screenshot thread.
                 let request: Box<ScreenshotRequest> = request.replace(None).unwrap();
