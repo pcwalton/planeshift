@@ -305,8 +305,9 @@ impl crate::Backend for Backend {
         let result_promise = Promise::new();
         let result_promise_to_return = result_promise.clone();
 
-        let hosting_view = self.native_component[layer].host;
+        let hosting_view = self.native_component[layer].host as usize;
         transaction_promise.then(Box::new(move |()| {
+            let hosting_view: id = hosting_view as id;
             let image;
             unsafe {
                 let view_bounds: NSRect = msg_send![hosting_view, bounds];

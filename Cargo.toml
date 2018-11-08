@@ -50,19 +50,11 @@ features = ["client", "egl"]
 [target.'cfg(target_os = "macos")'.dependencies]
 block = "0.1"
 cgl = "0.2"
+cocoa = "0.18.4"
+core-foundation = "0.6.3"
+core-graphics = "0.17.3"
+io-surface = "0.11.1"
 objc = "0.2"
-
-# [target.'cfg(target_os = "macos")'.dependencies.cocoa]
-# path = "/Users/pcwalton/Source/core-foundation-rs/cocoa"
-
-# [target.'cfg(target_os = "macos")'.dependencies.core-foundation]
-# path = "/Users/pcwalton/Source/core-foundation-rs/core-foundation"
-
-# [target.'cfg(target_os = "macos")'.dependencies.core-graphics]
-# path = "/Users/pcwalton/Source/core-foundation-rs/core-graphics"
-
-# [target.'cfg(target_os = "macos")'.dependencies.io-surface]
-# path = "/Users/pcwalton/Source/core-foundation-rs/io-surface"
 
 [target.'cfg(target_family = "windows")'.dependencies.mozangle]
 version = "0.1"
