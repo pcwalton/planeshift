@@ -8,11 +8,21 @@ extern crate winit;
 use euclid::{Point2D, Rect, Size2D};
 use gl::types::{GLint, GLuint};
 use planeshift::{Connection, LayerContext, SurfaceOptions};
+use std::env;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use winit::{ControlFlow, Event, EventsLoop, WindowBuilder, WindowEvent};
 
 pub fn main() {
+    // Get the output filename.
+    let output_path = match env::args().skip(1).next() {
+        None => {
+            println!("usage: screenshot OUTPUT.png");
+            return
+        }
+        Some(output_path) => output_path,
+    };
+
     let mut event_loop = EventsLoop::new();
     let window = WindowBuilder::new().with_title("planeshift minimal example");
 
@@ -48,7 +58,7 @@ pub fn main() {
     let quit = quit_event_loop.clone();
     context.present_gl_context(binding, &layer_rect).unwrap();
     context.screenshot_hosted_layer(layer).then(Box::new(move |image| {
-        image.save("screenshot.png").unwrap();
+        image.save(output_path.clone()).unwrap();
         quit.store(true, Ordering::SeqCst);
         drop(proxy.wakeup());
     }));
