@@ -36,6 +36,9 @@ optional = true
 version = "0.18"
 optional = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus = "0.6"
+
 [target.'cfg(target_os = "linux")'.dependencies.wayland-client]
 version = "0.20"
 features = ["egl", "native_lib"]
@@ -49,17 +52,17 @@ block = "0.1"
 cgl = "0.2"
 objc = "0.2"
 
-[target.'cfg(target_os = "macos")'.dependencies.cocoa]
-path = "/Users/pcwalton/Source/core-foundation-rs/cocoa"
+# [target.'cfg(target_os = "macos")'.dependencies.cocoa]
+# path = "/Users/pcwalton/Source/core-foundation-rs/cocoa"
 
-[target.'cfg(target_os = "macos")'.dependencies.core-foundation]
-path = "/Users/pcwalton/Source/core-foundation-rs/core-foundation"
+# [target.'cfg(target_os = "macos")'.dependencies.core-foundation]
+# path = "/Users/pcwalton/Source/core-foundation-rs/core-foundation"
 
-[target.'cfg(target_os = "macos")'.dependencies.core-graphics]
-path = "/Users/pcwalton/Source/core-foundation-rs/core-graphics"
+# [target.'cfg(target_os = "macos")'.dependencies.core-graphics]
+# path = "/Users/pcwalton/Source/core-foundation-rs/core-graphics"
 
-[target.'cfg(target_os = "macos")'.dependencies.io-surface]
-path = "/Users/pcwalton/Source/core-foundation-rs/io-surface"
+# [target.'cfg(target_os = "macos")'.dependencies.io-surface]
+# path = "/Users/pcwalton/Source/core-foundation-rs/io-surface"
 
 [target.'cfg(target_family = "windows")'.dependencies.mozangle]
 version = "0.1"

@@ -2,7 +2,10 @@
 
 //! Wayland native system implementation.
 
+use dbus::Connection as DbusConnection;
+use dbus::{BusType, Message};
 use euclid::{Rect, Size2D};
+use image::{self, RgbaImage};
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
 use std::fs::File;
@@ -12,7 +15,7 @@ use std::os::raw::c_void;
 use std::os::unix::io::AsRawFd;
 use std::ptr;
 use std::sync::{Arc, Mutex};
-use tempfile;
+use tempfile::{self, Builder};
 use wayland_client::commons::Interface;
 use wayland_client::egl::WlEglSurface;
 use wayland_client::protocol::wl_buffer::WlBuffer;
@@ -46,12 +49,13 @@ use crate::egl::types::{EGLContext, EGLDisplay, EGLSurface, EGLint};
 use crate::egl;
 use crate::{Connection, ConnectionError, GLAPI, GLContextLayerBinding, LayerContainerInfo};
 use crate::{LayerGeometryInfo, LayerId, LayerParent, LayerSurfaceInfo, LayerTreeInfo, LayerMap};
-use crate::{SurfaceOptions};
+use crate::{Promise, SurfaceOptions};
 
 pub struct Backend {
     native_component: LayerMap<NativeInfo>,
 
     dirty_layers: HashSet<LayerId>,
+
     #[allow(dead_code)]
     zero_file: File,
     output_scales: Arc<Mutex<HashMap<u32, i32>>>,
@@ -171,6 +175,7 @@ impl crate::Backend for Backend {
             native_component: LayerMap::new(),
 
             dirty_layers: HashSet::new(),
+
             zero_file,
             output_scales,
 
@@ -254,6 +259,7 @@ impl crate::Backend for Backend {
     fn begin_transaction(&self) {}
 
     fn end_transaction(&mut self,
+                       promise: &Promise<()>,
                        tree_component: &LayerMap<LayerTreeInfo>,
                        _: &LayerMap<LayerContainerInfo>,
                        _: &LayerMap<LayerGeometryInfo>,
@@ -275,6 +281,9 @@ impl crate::Backend for Backend {
 
         self.display.flush().unwrap();
         self.event_queue.dispatch().unwrap();
+
+        // FIXME(pcwalton): Is this right?
+        promise.resolve(());
 
         fn add_ancestors_to_commit_order<'a>(layer: LayerId,
                                              commit_order: &mut Vec<&'a Proxy<WlSurface>>,
@@ -406,6 +415,9 @@ impl crate::Backend for Backend {
             native_component.egl_window.resize(bounds.size.width, bounds.size.height, 0, 0);
             native_component.egl_window_size = bounds.size.to_u32();
             native_component.cached_egl_surface = None;
+
+            // Resize operations trigger an enter event.
+            native_component.surface_enter_event_handler.lock().unwrap().enter_events_left += 1;
         }
 
         self.dirty_layers.insert(layer);
@@ -528,11 +540,34 @@ impl crate::Backend for Backend {
             None => Err(()),
         }
     }
+
+    // Screenshots
+
+    fn screenshot_hosted_layer(&mut self,
+                               _: LayerId,
+                               _: &Promise<()>,
+                               _: &LayerMap<LayerTreeInfo>,
+                               _: &LayerMap<LayerContainerInfo>,
+                               _: &LayerMap<LayerGeometryInfo>,
+                               _: &LayerMap<LayerSurfaceInfo>)
+                               -> Promise<RgbaImage> {
+        // No reasonable way that I can see to do this on Wayland.
+        let promise = Promise::new();
+        promise.reject();
+        promise
+    }
 }
 
 impl Backend {
     fn add_layer(&mut self, new_layer: LayerId) {
+        let surface_enter_event_handler = Arc::new(Mutex::new(SurfaceEnterEventHandler {
+            promise: Promise::new(),
+            enter_events_left: 1,
+        }));
+
         let output_scales = self.output_scales.clone();
+        let surface_enter_event_handler_x = surface_enter_event_handler.clone();
+
         let surface = self.compositor
                           .create_surface()
                           .unwrap()
@@ -545,6 +580,13 @@ impl Backend {
                     let output_scales = output_scales.lock().unwrap();
                     if let Some(&scale) = output_scales.get(&output.id()) {
                         surface.set_buffer_scale(scale);
+                    }
+
+                    let mut surface_enter_event_handler = surface_enter_event_handler_x.lock()
+                                                                                       .unwrap();
+                    surface_enter_event_handler.enter_events_left -= 1;
+                    if surface_enter_event_handler.enter_events_left == 0 {
+                        surface_enter_event_handler.promise.resolve(());
                     }
                 }
                 _ => {}
@@ -561,6 +603,8 @@ impl Backend {
             egl_window,
             egl_window_size: Size2D::new(1, 1),
             cached_egl_surface: None,
+
+            surface_enter_event_handler,
         });
 
         self.dirty_layers.insert(new_layer);
@@ -591,6 +635,9 @@ struct NativeInfo {
     egl_window: WlEglSurface,
     egl_window_size: Size2D<u32>,
     cached_egl_surface: Option<CachedEGLSurface>,
+
+    // Resolves once the surface is displayed on screen.
+    surface_enter_event_handler: Arc<Mutex<SurfaceEnterEventHandler>>,
 }
 
 struct HostSurface {
@@ -600,6 +647,11 @@ struct HostSurface {
 struct CachedEGLSurface {
     egl_surface: EGLSurface,
     config_id: EGLint,
+}
+
+struct SurfaceEnterEventHandler {
+    promise: Promise<()>,
+    enter_events_left: u32,
 }
 
 trait ProxyExt {

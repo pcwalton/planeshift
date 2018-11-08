@@ -6,11 +6,11 @@ extern crate planeshift;
 extern crate winit;
 
 use euclid::{Point2D, Rect, Size2D};
-use gl::types::GLint;
+use gl::types::{GLint, GLuint};
 use planeshift::{Connection, LayerContext, SurfaceOptions};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use winit::{ControlFlow, EventsLoop, WindowBuilder};
+use winit::{ControlFlow, Event, EventsLoop, WindowBuilder, WindowEvent};
 
 pub fn main() {
     let mut event_loop = EventsLoop::new();
@@ -37,19 +37,10 @@ pub fn main() {
     let surface_options = SurfaceOptions::OPAQUE;
     context.set_layer_surface_options(layer, surface_options);
 
-    // Create the GL context.
+    // Create the GL context, and draw.
     let mut gl_context = context.create_gl_context(surface_options).unwrap();
     let binding = context.bind_layer_to_gl_context(layer, &mut gl_context).unwrap();
-
-    unsafe {
-        gl::BindFramebuffer(gl::FRAMEBUFFER, binding.framebuffer);
-
-        // Draw.
-        gl::Viewport(0, 0, width as GLint, height as GLint);
-        gl::ClearColor(0.0, 0.0, 1.0, 1.0);
-        gl::Clear(gl::COLOR_BUFFER_BIT);
-        gl::Flush();
-    }
+    draw(binding.framebuffer, &Size2D::new(width, height));
 
     // Present.
     let proxy = event_loop.create_proxy();
@@ -64,11 +55,33 @@ pub fn main() {
     context.end_transaction();
 
     // Take a screenshot after the transaction finishes.
-    event_loop.run_forever(|_| {
-        if quit_event_loop.load(Ordering::SeqCst) {
-            ControlFlow::Break
-        } else {
-            ControlFlow::Continue
+    event_loop.run_forever(|event| {
+        match event {
+            _ if quit_event_loop.load(Ordering::SeqCst) => return ControlFlow::Break,
+            Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
+                return ControlFlow::Break
+            }
+            Event::WindowEvent { event: WindowEvent::Refresh, .. } => {
+                // Redraw.
+                context.begin_transaction();
+                let binding = context.bind_layer_to_gl_context(layer, &mut gl_context).unwrap();
+                draw(binding.framebuffer, &Size2D::new(width, height));
+                context.present_gl_context(binding, &layer_rect).unwrap();
+                context.end_transaction();
+            }
+            _ => {}
         }
+
+        ControlFlow::Continue
     });
+}
+
+fn draw(fbo: GLuint, size: &Size2D<u32>) {
+    unsafe {
+        gl::BindFramebuffer(gl::FRAMEBUFFER, fbo);
+        gl::Viewport(0, 0, size.width as GLint, size.height as GLint);
+        gl::ClearColor(0.0, 0.0, 1.0, 1.0);
+        gl::Clear(gl::COLOR_BUFFER_BIT);
+        gl::Flush();
+    }
 }

@@ -14,6 +14,8 @@ extern crate lazy_static;
 extern crate winit;
 
 #[cfg(target_os = "linux")]
+extern crate dbus;
+#[cfg(target_os = "linux")]
 extern crate wayland_client;
 #[cfg(target_os = "linux")]
 #[macro_use]
@@ -225,7 +227,7 @@ pub enum GLAPI {
 }
 
 #[derive(Clone)]
-pub struct Promise<T>(Arc<Mutex<PromiseData<T>>>) where T: Clone;
+pub struct Promise<T>(Arc<Mutex<PromiseData<T>>>) where T: 'static + Clone + Send;
 
 // Components
 
@@ -260,9 +262,16 @@ pub enum LayerParent {
     NativeHost,
 }
 
-struct PromiseData<T> where T: Clone {
-    on_fulfilled: Vec<Box<dyn FnMut(T)>>,
-    result: Option<T>,
+struct PromiseData<T> where T: Clone + Send {
+    on_fulfilled: Vec<Box<dyn FnMut(T) + Send>>,
+    on_rejected: Vec<Box<dyn FnMut() + Send>>,
+    result: PromiseResult<T>,
+}
+
+enum PromiseResult<T> where T: Clone + Send {
+    Pending,
+    Resolved(T),
+    Rejected,
 }
 
 // Public API for the context
@@ -612,27 +621,81 @@ impl ConnectionError {
 
 // Promise infrastructure
 
-impl<T> Promise<T> where T: Clone {
+impl<T> Promise<T> where T: 'static + Clone + Send {
     fn new() -> Promise<T> {
         Promise(Arc::new(Mutex::new(PromiseData {
             on_fulfilled: vec![],
-            result: None,
+            on_rejected: vec![],
+            result: PromiseResult::Pending,
         })))
     }
 
-    pub fn then(&self, mut on_fulfilled: Box<FnMut(T)>) {
+    fn all(promises: Vec<Promise<T>>) -> Promise<Vec<T>> {
+        let result_promise = Promise::new();
+        let all = Arc::new(Mutex::new(All {
+            result_promise: result_promise.clone(),
+            promises: promises,
+            results: vec![],
+        }));
+        wait(all);
+        return result_promise;
+
+        fn wait<T>(all: Arc<Mutex<All<T>>>) where T: 'static + Clone + Send {
+            let next_promise;
+            {
+                let mut all = all.lock().unwrap();
+                if all.results.len() == all.promises.len() {
+                    let results = mem::replace(&mut all.results, vec![]);
+                    all.result_promise.resolve(results);
+                    return;
+                }
+                next_promise = all.promises[all.results.len()].clone();
+            }
+
+            next_promise.then(Box::new(move |result| {
+                all.lock().unwrap().results.push(result);
+                wait(all.clone());
+            }));
+        }
+
+        struct All<T> where T: 'static + Clone + Send {
+            result_promise: Promise<Vec<T>>,
+            promises: Vec<Promise<T>>,
+            results: Vec<T>,
+        }
+    }
+
+    pub fn then(&self, mut on_fulfilled: Box<FnMut(T) + Send>) {
         let mut this = self.0.lock().unwrap();
         match this.result {
-            Some(ref result) => on_fulfilled((*result).clone()),
-            None => this.on_fulfilled.push(on_fulfilled),
+            PromiseResult::Rejected => {}
+            PromiseResult::Resolved(ref result) => on_fulfilled((*result).clone()),
+            PromiseResult::Pending => this.on_fulfilled.push(on_fulfilled),
+        }
+    }
+
+    pub fn or_else(&self, mut on_rejected: Box<FnMut() + Send>) {
+        let mut this = self.0.lock().unwrap();
+        match this.result {
+            PromiseResult::Rejected => on_rejected(),
+            PromiseResult::Resolved(_) => {}
+            PromiseResult::Pending => this.on_rejected.push(on_rejected),
         }
     }
 
     fn resolve(&self, result: T) {
         let mut this = self.0.lock().unwrap();
-        this.result = Some(result.clone());
+        this.result = PromiseResult::Resolved(result.clone());
         for mut on_fulfilled in this.on_fulfilled.drain(..) {
             on_fulfilled(result.clone())
+        }
+    }
+
+    fn reject(&self) {
+        let mut this = self.0.lock().unwrap();
+        this.result = PromiseResult::Rejected;
+        for mut on_rejected in this.on_rejected.drain(..) {
+            on_rejected()
         }
     }
 }
