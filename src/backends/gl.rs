@@ -152,8 +152,8 @@ impl crate::Backend for Backend {
                        container_component: &LayerMap<LayerContainerInfo>,
                        geometry_component: &LayerMap<LayerGeometryInfo>,
                        surface_component: &LayerMap<LayerSurfaceInfo>) {
-        if let Some(hosted_layer) = self.hosted_layer {
-            if let Some(dirty_rect) = self.dirty_rect {
+        match (self.dirty_rect, self.hosted_layer) {
+            (Some(dirty_rect), Some(hosted_layer)) => {
                 self.connection.prepare_to_draw();
 
                 // TODO(pcwalton)
@@ -203,12 +203,16 @@ impl crate::Backend for Backend {
                     gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
                 }
 
+                self.dirty_rect = None;
+                promise.resolve(());
                 self.connection.present(&dirty_rect);
             }
+            (Some(_), None) => {
+                self.dirty_rect = None;
+                promise.resolve(());
+            }
+            (None, _) => promise.resolve(()),
         }
-
-        self.dirty_rect = None;
-        promise.resolve(());
     }
 
     // Layer creation and destruction
@@ -424,14 +428,66 @@ impl crate::Backend for Backend {
     // Screenshots
 
     fn screenshot_hosted_layer(&mut self,
-                               _: LayerId,
-                               _: &Promise<()>,
-                               _: &LayerMap<LayerTreeInfo>,
+                               root_layer: LayerId,
+                               render_promise: &Promise<()>,
+                               tree_component: &LayerMap<LayerTreeInfo>,
                                _: &LayerMap<LayerContainerInfo>,
-                               _: &LayerMap<LayerGeometryInfo>,
+                               geometry_component: &LayerMap<LayerGeometryInfo>,
                                _: &LayerMap<LayerSurfaceInfo>)
                                -> Promise<RgbaImage> {
-        unimplemented!()
+        let promise = Promise::new();
+
+        let mut bounds = Rect::new(Point2D::zero(), geometry_component[root_layer].bounds.size);
+        let mut layer = root_layer;
+        loop {
+            bounds.origin += geometry_component[layer].bounds.origin.to_vector();
+            match tree_component.get(layer) {
+                Some(LayerTreeInfo { parent: LayerParent::Layer(parent), .. }) => layer = *parent,
+                Some(_) | None => break,
+            }
+        }
+
+        let screenshot_info = ScreenshotInfo {
+            framebuffer: self.connection.default_framebuffer(),
+            bounds: bounds.round().to_u32(),
+            promise: promise.clone(),
+        };
+
+        render_promise.then(Box::new(move |()| {
+            unsafe {
+                gl::BindFramebuffer(gl::FRAMEBUFFER, screenshot_info.framebuffer);
+                let bounds = screenshot_info.bounds;
+                let (width, height) = (bounds.size.width as usize, bounds.size.height as usize);
+                let mut pixels = vec![0; width * height * 4];
+                gl::ReadPixels(bounds.origin.x as GLint,
+                               bounds.origin.y as GLint,
+                               bounds.size.width as GLint,
+                               bounds.size.height as GLint,
+                               gl::RGBA,
+                               gl::UNSIGNED_BYTE,
+                               pixels.as_mut_ptr() as *mut _);
+
+                // Flip vertically.
+                for y0 in 0..(height / 2) {
+                    let (start0, start1) = (y0 * width * 4, (height - y0 - 1) * width * 4);
+                    for offset in 0..(width * 4) {
+                        pixels.swap(start0 + offset, start1 + offset);
+                    }
+                }
+
+                screenshot_info.promise.resolve(RgbaImage::from_vec(bounds.size.width,
+                                                                    bounds.size.height,
+                                                                    pixels).unwrap());
+            }
+        }));
+
+        return promise;
+
+        struct ScreenshotInfo {
+            framebuffer: GLuint,
+            bounds: Rect<u32>,
+            promise: Promise<RgbaImage>,
+        }
     }
 
     // `winit` integration

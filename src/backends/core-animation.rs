@@ -327,14 +327,14 @@ impl crate::Backend for Backend {
                                                             screen_frame.size.height -
                                                             view_frame.origin.y -
                                                             view_frame.size.height),
-                                            &CGSize::new(view_frame.size.width,
-                                                        view_frame.size.height));
+                                              &CGSize::new(view_frame.size.width,
+                                                           view_frame.size.height));
 
                 image = window::create_image(screen_rect,
-                                            kCGWindowListOptionAll,
-                                            window_id,
-                                            kCGWindowImageBoundsIgnoreFraming |
-                                            kCGWindowImageBestResolution).unwrap();
+                                             kCGWindowListOptionAll,
+                                             window_id,
+                                             kCGWindowImageBoundsIgnoreFraming |
+                                             kCGWindowImageBestResolution).unwrap();
             }
 
             let (width, height) = (image.width() as u32, image.height() as u32);
