@@ -88,6 +88,7 @@ mod egl {
     include!(concat!(env!("OUT_DIR"), "/egl_bindings.rs"));
 }
 
+/// Manages all the layers.
 pub struct LayerContext<B = backends::default::Backend> where B: Backend {
     next_layer_id: LayerId,
     transaction: Option<TransactionInfo>,
@@ -100,40 +101,74 @@ pub struct LayerContext<B = backends::default::Backend> where B: Backend {
     backend: B,
 }
 
+/// A unique identifier for a layer.
 #[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Hash, Debug)]
 pub struct LayerId(pub u32);
 
+#[doc(hidden)]
 #[derive(Debug)]
 pub struct LayerMap<T>(pub Vec<Option<T>>);
 
-
 // Public structures
 
+/// A connection to the OS display server.
 pub enum Connection<'a, N> {
+    /// A native connection.
     Native(N),
+    /// A connection managed by `winit`.
     #[cfg(feature = "enable-winit")]
     Winit(WindowBuilder, &'a EventsLoop),
 }
 
 bitflags! {
+    /// Specifies the type of GPU surface or surfaces to be allocated for a surface layer.
     pub struct SurfaceOptions: u8 {
+        /// The layer is opaque.
+        ///
+        /// The OS may be able to optimize composition of opaque layers, for example by not
+        /// composing any content underneath them
         const OPAQUE = 0x01;
+
+        /// The surface includes a 24-bit depth or Z-buffer.
         const DEPTH = 0x02;
+
+        /// The surface includes an 8-bit stencil buffer.
         const STENCIL = 0x04;
     }
 }
 
+/// Information about the current binding between the OpenGL context and its associated layer.
 pub struct GLContextLayerBinding {
+    /// The layer bound to the OpenGL context.
     pub layer: LayerId,
+    /// The framebuffer object bound to this layer.
+    ///
+    /// Depending on the backend, this can be zero, in which case the default framebuffer is bound
+    /// to the layer, or it may be nonzero, in which case a framebuffer object is bound to the
+    /// layer.
+    ///
+    /// Before rendering to the layer, you must bind this framebuffer with a call like:
+    ///
+    ///     gl::BindFramebuffer(gl::FRAMEBUFFER, binding.framebuffer);
     pub framebuffer: GLuint,
 }
 
+/// The OpenGL API that a backend exposes.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum GLAPI {
+    /// Full OpenGL (not OpenGL ES).
     GL,
+    /// OpenGL ES.
     GLES,
 }
 
+/// Represents the result of a pending operation.
+///
+/// This is similar to a Rust future, but it always uses the native OS event loop for dispatch.
+/// Note that it is your responsibility to pump the OS event loop. (If using `winit`, this is the
+/// `EventLoop` object.)
+///
+/// Use the `then` method to attach handlers.
 #[derive(Clone)]
 pub struct Promise<T>(Arc<Mutex<PromiseData<T>>>) where T: 'static + Clone + Send;
 
@@ -187,6 +222,9 @@ enum PromiseResult<T> where T: Clone + Send {
 impl<B> LayerContext<B> where B: Backend {
     // Core functions
 
+    /// Creates a layer context from a connection to the display server.
+    ///
+    /// This method allows you to specify a backend explicitly.
     pub fn with_backend_connection(connection: Connection<B::NativeConnection>)
                                    -> Result<LayerContext<B>, ConnectionError> {
         Ok(LayerContext {
@@ -204,21 +242,34 @@ impl<B> LayerContext<B> where B: Backend {
 
     // OpenGL context creation
 
+    /// Creates an OpenGL context with the given options.
+    ///
+    /// The options must match those used to create any surface layers that this OpenGL context
+    /// will bind to.
     pub fn create_gl_context(&mut self, options: SurfaceOptions) -> Result<B::GLContext, ()> {
         self.backend.create_gl_context(options)
     }
 
+    /// Creates an OpenGL context from a native OpenGL context.
     pub unsafe fn wrap_gl_context(&mut self, native_gl_context: B::NativeGLContext)
                                   -> Result<B::GLContext, ()> {
         self.backend.wrap_gl_context(native_gl_context)
     }
 
+    /// Returns the flavor of OpenGL that the current backend exposes.
     pub fn gl_api(&self) -> GLAPI {
         self.backend.gl_api()
     }
 
     // Transactions
 
+    /// Opens a new atomic transaction.
+    ///
+    /// All layer manipulations must take place between calls to `begin_transaction` and
+    /// `end_transaction`, unless otherwise specified. The layer context will panic otherwise.
+    ///
+    /// Transactions may be nested. No operations happen until the final `end_transaction` call is
+    /// issued.
     pub fn begin_transaction(&mut self) {
         match self.transaction {
             None => {
@@ -234,6 +285,10 @@ impl<B> LayerContext<B> where B: Backend {
         }
     }
 
+    /// Ends the current transaction and submits it to the display server.
+    ///
+    /// This method is *not* synchronous; it merely flushes the pending operations the server,
+    /// ensuring that they will complete in finite time.
     pub fn end_transaction(&mut self) {
         {
             let transaction = self.transaction
@@ -254,6 +309,10 @@ impl<B> LayerContext<B> where B: Backend {
                                      &self.surface_component);
     }
 
+    /// Returns true if a transaction is in process and false otherwise.
+    ///
+    /// In other words, this returns true if and only if `begin_transaction` has been called
+    /// without a matching `end_transaction`.
     #[inline]
     fn in_transaction(&self) -> bool {
         self.transaction.is_some()
@@ -261,6 +320,12 @@ impl<B> LayerContext<B> where B: Backend {
 
     // Layer tree management system
 
+    /// Creates a new container layer and returns its ID.
+    ///
+    /// Container layers, as their name implies, contain other layers. They are invisible and
+    /// cannot be rendered to. OpenGL contexts also cannot be attached to them.
+    ///
+    /// Initially, the newly-created layer is off-screen, with neither position nor size.
     pub fn add_container_layer(&mut self) -> LayerId {
         debug_assert!(self.in_transaction());
 
@@ -275,6 +340,12 @@ impl<B> LayerContext<B> where B: Backend {
         layer
     }
 
+    /// Creates a new surface layer and returns its ID.
+    ///
+    /// Surface layers can be rendered to, and OpenGL contexts can be attached to them. They may
+    /// not contain other layers; therefore, they must be leaves of the layer tree.
+    ///
+    /// Initially, the newly-created layer is off-screen, with neither position nor size.
     pub fn add_surface_layer(&mut self) -> LayerId {
         debug_assert!(self.in_transaction());
 
@@ -289,10 +360,19 @@ impl<B> LayerContext<B> where B: Backend {
         layer
     }
 
+    /// Returns the parent of the given layer, if it is on-screen.
     pub fn parent_of(&self, layer: LayerId) -> Option<&LayerParent> {
         self.tree_component.get(layer).map(|info| &info.parent)
     }
 
+    /// Adds a layer to a container layer, optionally before a specific sibling.
+    ///
+    /// The specified parent layer must be a container layer. The new child layer must be
+    /// off-screen (i.e. not in the tree).
+    ///
+    /// If `reference` is specified, it must name an immediate child of the given parent layer. The
+    /// new child layer will be added before that reference in the parent's child list. If
+    /// `reference` is `None`, then the new child is added to the end of the parent's child list.
     pub fn insert_before(&mut self,
                          parent: LayerId,
                          new_child: LayerId,
@@ -331,6 +411,9 @@ impl<B> LayerContext<B> where B: Backend {
                                    &self.geometry_component);
     }
 
+    /// Adds a layer to the end of a container layer's child list.
+    ///
+    /// This is equivalent to `insert_before` with `reference` set to `None`.
     #[inline]
     pub fn append_child(&mut self, parent: LayerId, new_child: LayerId) {
         self.insert_before(parent, new_child, None)
@@ -386,7 +469,9 @@ impl<B> LayerContext<B> where B: Backend {
         }
     }
 
-    /// The layer must be removed from the tree first.
+    /// Deletes a layer and destroys all graphics resources associated with it.
+    ///
+    /// The layer must be offscreen (i.e. removed from the tree) first.
     pub fn delete_layer(&mut self, layer: LayerId) {
         debug_assert!(self.in_transaction());
 
@@ -403,6 +488,9 @@ impl<B> LayerContext<B> where B: Backend {
 
     // Geometry system
 
+    /// Returns the boundaries of the layer relative to its parent.
+    ///
+    /// The rectangle origin specifies the top left corner of the layer.
     pub fn layer_bounds(&self, layer: LayerId) -> Rect<f32> {
         debug_assert!(self.in_transaction());
 
@@ -412,6 +500,12 @@ impl<B> LayerContext<B> where B: Backend {
         }
     }
 
+    /// Sets the boundaries of the layer relative to its parent.
+    ///
+    /// The rectangle origin specifies the top left corner of the layer.
+    ///
+    /// If this call causes the size of the layer to change, it may cause associated GPU resources
+    /// to be reallocated.
     pub fn set_layer_bounds(&mut self, layer: LayerId, new_bounds: &Rect<f32>) {
         debug_assert!(self.in_transaction());
 
@@ -427,6 +521,12 @@ impl<B> LayerContext<B> where B: Backend {
 
     // Miscellaneous layer flags
 
+    /// Sets options for this surface layer.
+    ///
+    /// Any GL contexts attached to this layer must have the same surface options as the layer
+    /// itself.
+    ///
+    /// The `layer` parameter must refer to a surface layer, not a container layer.
     pub fn set_layer_surface_options(&mut self, layer: LayerId, surface_options: SurfaceOptions) {
         debug_assert!(self.in_transaction());
 
