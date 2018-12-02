@@ -89,7 +89,10 @@ mod egl {
 }
 
 /// Manages all the layers.
-pub struct LayerContext<B = backends::default::Backend> where B: Backend {
+pub struct LayerContext<B = backends::default::Backend>
+where
+    B: Backend,
+{
     next_layer_id: LayerId,
     transaction: Option<TransactionInfo>,
 
@@ -170,7 +173,9 @@ pub enum GLAPI {
 ///
 /// Use the `then` method to attach handlers.
 #[derive(Clone)]
-pub struct Promise<T>(Arc<Mutex<PromiseData<T>>>) where T: 'static + Clone + Send;
+pub struct Promise<T>(Arc<Mutex<PromiseData<T>>>)
+where
+    T: 'static + Clone + Send;
 
 // Components
 
@@ -205,13 +210,19 @@ pub enum LayerParent {
     NativeHost,
 }
 
-struct PromiseData<T> where T: Clone + Send {
+struct PromiseData<T>
+where
+    T: Clone + Send,
+{
     on_fulfilled: Vec<Box<dyn FnMut(T) + Send>>,
     on_rejected: Vec<Box<dyn FnMut() + Send>>,
     result: PromiseResult<T>,
 }
 
-enum PromiseResult<T> where T: Clone + Send {
+enum PromiseResult<T>
+where
+    T: Clone + Send,
+{
     Pending,
     Resolved(T),
     Rejected,
@@ -219,14 +230,18 @@ enum PromiseResult<T> where T: Clone + Send {
 
 // Public API for the context
 
-impl<B> LayerContext<B> where B: Backend {
+impl<B> LayerContext<B>
+where
+    B: Backend,
+{
     // Core functions
 
     /// Creates a layer context from a connection to the display server.
     ///
     /// This method allows you to specify a backend explicitly.
-    pub fn with_backend_connection(connection: Connection<B::NativeConnection>)
-                                   -> Result<LayerContext<B>, ConnectionError> {
+    pub fn with_backend_connection(
+        connection: Connection<B::NativeConnection>,
+    ) -> Result<LayerContext<B>, ConnectionError> {
         Ok(LayerContext {
             backend: Backend::new(connection)?,
 
@@ -251,8 +266,10 @@ impl<B> LayerContext<B> where B: Backend {
     }
 
     /// Creates an OpenGL context from a native OpenGL context.
-    pub unsafe fn wrap_gl_context(&mut self, native_gl_context: B::NativeGLContext)
-                                  -> Result<B::GLContext, ()> {
+    pub unsafe fn wrap_gl_context(
+        &mut self,
+        native_gl_context: B::NativeGLContext,
+    ) -> Result<B::GLContext, ()> {
         self.backend.wrap_gl_context(native_gl_context)
     }
 
@@ -291,22 +308,25 @@ impl<B> LayerContext<B> where B: Backend {
     /// ensuring that they will complete in finite time.
     pub fn end_transaction(&mut self) {
         {
-            let transaction = self.transaction
-                                  .as_mut()
-                                  .expect("end_transaction(): Not in a transaction!");
+            let transaction = self
+                .transaction
+                .as_mut()
+                .expect("end_transaction(): Not in a transaction!");
             transaction.level -= 1;
             if transaction.level > 0 {
-                return
+                return;
             }
         }
 
         // If we got here, we're done with the transaction.
         let transaction = self.transaction.take().unwrap();
-        self.backend.end_transaction(&transaction.promise,
-                                     &self.tree_component,
-                                     &self.container_component,
-                                     &self.geometry_component,
-                                     &self.surface_component);
+        self.backend.end_transaction(
+            &transaction.promise,
+            &self.tree_component,
+            &self.container_component,
+            &self.geometry_component,
+            &self.surface_component,
+        );
     }
 
     /// Returns true if a transaction is in process and false otherwise.
@@ -332,10 +352,13 @@ impl<B> LayerContext<B> where B: Backend {
         let layer = self.next_layer_id;
         self.next_layer_id.0 += 1;
 
-        self.container_component.add(layer, LayerContainerInfo {
-            first_child: None,
-            last_child: None,
-        });
+        self.container_component.add(
+            layer,
+            LayerContainerInfo {
+                first_child: None,
+                last_child: None,
+            },
+        );
         self.backend.add_container_layer(layer);
         layer
     }
@@ -352,9 +375,12 @@ impl<B> LayerContext<B> where B: Backend {
         let layer = self.next_layer_id;
         self.next_layer_id.0 += 1;
 
-        self.surface_component.add(layer, LayerSurfaceInfo {
-            options: SurfaceOptions::empty(),
-        });
+        self.surface_component.add(
+            layer,
+            LayerSurfaceInfo {
+                options: SurfaceOptions::empty(),
+            },
+        );
 
         self.backend.add_surface_layer(layer);
         layer
@@ -373,10 +399,12 @@ impl<B> LayerContext<B> where B: Backend {
     /// If `reference` is specified, it must name an immediate child of the given parent layer. The
     /// new child layer will be added before that reference in the parent's child list. If
     /// `reference` is `None`, then the new child is added to the end of the parent's child list.
-    pub fn insert_before(&mut self,
-                         parent: LayerId,
-                         new_child: LayerId,
-                         reference: Option<LayerId>) {
+    pub fn insert_before(
+        &mut self,
+        parent: LayerId,
+        new_child: LayerId,
+        reference: Option<LayerId>,
+    ) {
         debug_assert!(self.in_transaction());
 
         if let Some(reference) = reference {
@@ -388,11 +416,14 @@ impl<B> LayerContext<B> where B: Backend {
             None => self.container_component[parent].last_child,
         };
 
-        self.tree_component.add(new_child, LayerTreeInfo {
-            parent: LayerParent::Layer(parent),
-            prev_sibling: new_prev_sibling,
-            next_sibling: reference,
-        });
+        self.tree_component.add(
+            new_child,
+            LayerTreeInfo {
+                parent: LayerParent::Layer(parent),
+                prev_sibling: new_prev_sibling,
+                next_sibling: reference,
+            },
+        );
 
         match reference {
             Some(reference) => self.tree_component[reference].next_sibling = Some(new_child),
@@ -403,12 +434,14 @@ impl<B> LayerContext<B> where B: Backend {
             self.container_component[parent].first_child = Some(new_child)
         }
 
-        self.backend.insert_before(parent,
-                                   new_child,
-                                   reference,
-                                   &self.tree_component,
-                                   &self.container_component,
-                                   &self.geometry_component);
+        self.backend.insert_before(
+            parent,
+            new_child,
+            reference,
+            &self.tree_component,
+            &self.container_component,
+            &self.geometry_component,
+        );
     }
 
     /// Adds a layer to the end of a container layer's child list.
@@ -423,17 +456,22 @@ impl<B> LayerContext<B> where B: Backend {
     pub unsafe fn host_layer(&mut self, host: B::Host, layer: LayerId) {
         debug_assert!(self.in_transaction());
 
-        self.tree_component.add(layer, LayerTreeInfo {
-            parent: LayerParent::NativeHost,
-            prev_sibling: None,
-            next_sibling: None,
-        });
+        self.tree_component.add(
+            layer,
+            LayerTreeInfo {
+                parent: LayerParent::NativeHost,
+                prev_sibling: None,
+                next_sibling: None,
+            },
+        );
 
-        self.backend.host_layer(layer,
-                                host,
-                                &self.tree_component,
-                                &self.container_component,
-                                &self.geometry_component);
+        self.backend.host_layer(
+            layer,
+            host,
+            &self.tree_component,
+            &self.container_component,
+            &self.geometry_component,
+        );
     }
 
     pub fn remove_from_parent(&mut self, old_child: LayerId) {
@@ -444,10 +482,12 @@ impl<B> LayerContext<B> where B: Backend {
             LayerParent::NativeHost => self.backend.unhost_layer(old_child),
 
             LayerParent::Layer(parent_layer) => {
-                self.backend.remove_from_superlayer(old_child,
-                                                    parent_layer,
-                                                    &self.tree_component,
-                                                    &self.geometry_component);
+                self.backend.remove_from_superlayer(
+                    old_child,
+                    parent_layer,
+                    &self.tree_component,
+                    &self.geometry_component,
+                );
 
                 match old_tree.prev_sibling {
                     None => {
@@ -509,14 +549,18 @@ impl<B> LayerContext<B> where B: Backend {
     pub fn set_layer_bounds(&mut self, layer: LayerId, new_bounds: &Rect<f32>) {
         debug_assert!(self.in_transaction());
 
-        let old_bounds = mem::replace(&mut self.geometry_component.get_mut_default(layer).bounds,
-                                      *new_bounds);
+        let old_bounds = mem::replace(
+            &mut self.geometry_component.get_mut_default(layer).bounds,
+            *new_bounds,
+        );
 
-        self.backend.set_layer_bounds(layer,
-                                      &old_bounds,
-                                      &self.tree_component,
-                                      &self.container_component,
-                                      &self.geometry_component);
+        self.backend.set_layer_bounds(
+            layer,
+            &old_bounds,
+            &self.tree_component,
+            &self.container_component,
+            &self.geometry_component,
+        );
     }
 
     // Miscellaneous layer flags
@@ -531,30 +575,41 @@ impl<B> LayerContext<B> where B: Backend {
         debug_assert!(self.in_transaction());
 
         self.surface_component[layer].options = surface_options;
-        self.backend.set_layer_surface_options(layer, &self.surface_component);
+        self.backend
+            .set_layer_surface_options(layer, &self.surface_component);
     }
 
     // Surface system
 
-    pub fn bind_layer_to_gl_context(&mut self, layer: LayerId, context: &mut B::GLContext)
-                                    -> Result<GLContextLayerBinding, ()> {
+    pub fn bind_layer_to_gl_context(
+        &mut self,
+        layer: LayerId,
+        context: &mut B::GLContext,
+    ) -> Result<GLContextLayerBinding, ()> {
         debug_assert!(self.in_transaction());
         debug_assert!(!self.container_component.has(layer));
 
-        self.backend.bind_layer_to_gl_context(layer,
-                                              context,
-                                              &self.geometry_component,
-                                              &self.surface_component)
+        self.backend.bind_layer_to_gl_context(
+            layer,
+            context,
+            &self.geometry_component,
+            &self.surface_component,
+        )
     }
 
-    pub fn present_gl_context(&mut self, binding: GLContextLayerBinding, changed_rect: &Rect<f32>)
-                              -> Result<(), ()> {
+    pub fn present_gl_context(
+        &mut self,
+        binding: GLContextLayerBinding,
+        changed_rect: &Rect<f32>,
+    ) -> Result<(), ()> {
         debug_assert!(self.in_transaction());
 
-        self.backend.present_gl_context(binding,
-                                        changed_rect,
-                                        &self.tree_component,
-                                        &self.geometry_component)
+        self.backend.present_gl_context(
+            binding,
+            changed_rect,
+            &self.tree_component,
+            &self.geometry_component,
+        )
     }
 
     // Screenshots
@@ -564,12 +619,14 @@ impl<B> LayerContext<B> where B: Backend {
         assert_eq!(self.tree_component[layer].parent, LayerParent::NativeHost);
 
         let transaction_promise = self.transaction.as_ref().unwrap().promise.clone();
-        self.backend.screenshot_hosted_layer(layer,
-                                             &transaction_promise,
-                                             &self.tree_component,
-                                             &self.container_component,
-                                             &self.geometry_component,
-                                             &self.surface_component)
+        self.backend.screenshot_hosted_layer(
+            layer,
+            &transaction_promise,
+            &self.tree_component,
+            &self.container_component,
+            &self.geometry_component,
+            &self.surface_component,
+        )
     }
 
     // `winit` integration
@@ -583,23 +640,29 @@ impl<B> LayerContext<B> where B: Backend {
     pub fn host_layer_in_window(&mut self, layer: LayerId) -> Result<(), ()> {
         debug_assert!(self.in_transaction());
 
-        self.tree_component.add(layer, LayerTreeInfo {
-            parent: LayerParent::NativeHost,
-            prev_sibling: None,
-            next_sibling: None,
-        });
+        self.tree_component.add(
+            layer,
+            LayerTreeInfo {
+                parent: LayerParent::NativeHost,
+                prev_sibling: None,
+                next_sibling: None,
+            },
+        );
 
-        self.backend.host_layer_in_window(layer,
-                                          &self.tree_component,
-                                          &self.container_component,
-                                          &self.geometry_component)
+        self.backend.host_layer_in_window(
+            layer,
+            &self.tree_component,
+            &self.container_component,
+            &self.geometry_component,
+        )
     }
 }
 
 impl LayerContext<backends::default::Backend> {
     #[inline]
-    pub fn new(connection: Connection<<backends::default::Backend as Backend>::NativeConnection>)
-               -> Result<LayerContext<backends::default::Backend>, ConnectionError> {
+    pub fn new(
+        connection: Connection<<backends::default::Backend as Backend>::NativeConnection>,
+    ) -> Result<LayerContext<backends::default::Backend>, ConnectionError> {
         LayerContext::with_backend_connection(connection)
     }
 }
@@ -629,7 +692,10 @@ impl ConnectionError {
 
 // Promise infrastructure
 
-impl<T> Promise<T> where T: 'static + Clone + Send {
+impl<T> Promise<T>
+where
+    T: 'static + Clone + Send,
+{
     fn new() -> Promise<T> {
         Promise(Arc::new(Mutex::new(PromiseData {
             on_fulfilled: vec![],
@@ -648,7 +714,10 @@ impl<T> Promise<T> where T: 'static + Clone + Send {
         wait(all);
         return result_promise;
 
-        fn wait<T>(all: Arc<Mutex<All<T>>>) where T: 'static + Clone + Send {
+        fn wait<T>(all: Arc<Mutex<All<T>>>)
+        where
+            T: 'static + Clone + Send,
+        {
             let next_promise;
             {
                 let mut all = all.lock().unwrap();
@@ -666,7 +735,10 @@ impl<T> Promise<T> where T: 'static + Clone + Send {
             }));
         }
 
-        struct All<T> where T: 'static + Clone + Send {
+        struct All<T>
+        where
+            T: 'static + Clone + Send,
+        {
             result_promise: Promise<Vec<T>>,
             promises: Vec<Promise<T>>,
             results: Vec<T>,
@@ -765,7 +837,10 @@ impl<T> LayerMap<T> {
     }
 }
 
-impl<T> LayerMap<T> where T: Default {
+impl<T> LayerMap<T>
+where
+    T: Default,
+{
     fn get_mut_default(&mut self, layer_id: LayerId) -> &mut T {
         while self.0.len() <= (layer_id.0 as usize) {
             self.0.push(None)

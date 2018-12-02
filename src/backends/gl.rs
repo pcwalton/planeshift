@@ -11,8 +11,8 @@
 //! A fallback backend that renders the layers ourselves using OpenGL.
 
 use euclid::{Point2D, Rect, Size2D};
-use gl::types::{GLchar, GLint, GLuint, GLvoid};
 use gl;
+use gl::types::{GLchar, GLint, GLuint, GLvoid};
 use image::RgbaImage;
 use std::os::raw::c_void;
 use std::ptr;
@@ -22,7 +22,7 @@ use glutin::{Api, ContextBuilder, GlContext, GlProfile, GlRequest, GlWindow};
 #[cfg(feature = "enable-winit")]
 use winit::{EventsLoop, Window, WindowBuilder};
 
-use crate::{Connection, ConnectionError, GLAPI, GLContextLayerBinding, LayerContainerInfo};
+use crate::{Connection, ConnectionError, GLContextLayerBinding, LayerContainerInfo, GLAPI};
 use crate::{LayerGeometryInfo, LayerId, LayerMap, LayerParent, LayerSurfaceInfo, LayerTreeInfo};
 use crate::{Promise, SurfaceOptions};
 
@@ -82,36 +82,42 @@ impl crate::Backend for Backend {
             gl::LinkProgram(program);
             gl::UseProgram(program);
 
-            attribute_position = gl::GetAttribLocation(program,
-                                                       b"aPosition\0".as_ptr() as *const GLchar);
-            attribute_tex_coord = gl::GetAttribLocation(program,
-                                                        b"aTexCoord\0".as_ptr() as *const GLchar);
+            attribute_position =
+                gl::GetAttribLocation(program, b"aPosition\0".as_ptr() as *const GLchar);
+            attribute_tex_coord =
+                gl::GetAttribLocation(program, b"aTexCoord\0".as_ptr() as *const GLchar);
             uniform_scale = gl::GetUniformLocation(program, b"uScale\0".as_ptr() as *const GLchar);
             uniform_translation =
                 gl::GetUniformLocation(program, b"uTranslation\0".as_ptr() as *const GLchar);
             uniform_depth = gl::GetUniformLocation(program, b"uDepth\0".as_ptr() as *const GLchar);
-            uniform_texture = gl::GetUniformLocation(program,
-                                                     b"uTexture\0".as_ptr() as *const GLchar);
+            uniform_texture =
+                gl::GetUniformLocation(program, b"uTexture\0".as_ptr() as *const GLchar);
 
             gl::GenBuffers(1, &mut vertex_buffer);
             gl::BindBuffer(gl::ARRAY_BUFFER, vertex_buffer);
-            gl::BufferData(gl::ARRAY_BUFFER,
-                           VERTEX_BUFFER_DATA.len() as isize,
-                           VERTEX_BUFFER_DATA.as_ptr() as *const GLvoid,
-                           gl::STATIC_DRAW);
+            gl::BufferData(
+                gl::ARRAY_BUFFER,
+                VERTEX_BUFFER_DATA.len() as isize,
+                VERTEX_BUFFER_DATA.as_ptr() as *const GLvoid,
+                gl::STATIC_DRAW,
+            );
 
-            gl::VertexAttribPointer(attribute_tex_coord as GLuint,
-                                    2,
-                                    gl::BYTE,
-                                    gl::FALSE,
-                                    4,
-                                    2 as *const GLvoid);
-            gl::VertexAttribPointer(attribute_position as GLuint,
-                                    2,
-                                    gl::BYTE,
-                                    gl::FALSE,
-                                    4,
-                                    0 as *const GLvoid);
+            gl::VertexAttribPointer(
+                attribute_tex_coord as GLuint,
+                2,
+                gl::BYTE,
+                gl::FALSE,
+                4,
+                2 as *const GLvoid,
+            );
+            gl::VertexAttribPointer(
+                attribute_position as GLuint,
+                2,
+                gl::BYTE,
+                gl::FALSE,
+                4,
+                0 as *const GLvoid,
+            );
             gl::EnableVertexAttribArray(attribute_tex_coord as GLuint);
             gl::EnableVertexAttribArray(attribute_position as GLuint);
         }
@@ -154,12 +160,14 @@ impl crate::Backend for Backend {
         self.connection.make_current();
     }
 
-    fn end_transaction(&mut self,
-                       promise: &Promise<()>,
-                       tree_component: &LayerMap<LayerTreeInfo>,
-                       container_component: &LayerMap<LayerContainerInfo>,
-                       geometry_component: &LayerMap<LayerGeometryInfo>,
-                       surface_component: &LayerMap<LayerSurfaceInfo>) {
+    fn end_transaction(
+        &mut self,
+        promise: &Promise<()>,
+        tree_component: &LayerMap<LayerTreeInfo>,
+        container_component: &LayerMap<LayerContainerInfo>,
+        geometry_component: &LayerMap<LayerGeometryInfo>,
+        surface_component: &LayerMap<LayerSurfaceInfo>,
+    ) {
         match (self.dirty_rect, self.hosted_layer) {
             (Some(dirty_rect), Some(hosted_layer)) => {
                 self.connection.prepare_to_draw();
@@ -172,10 +180,12 @@ impl crate::Backend for Backend {
                     gl::BindVertexArray(self.vertex_array);
                     gl::UseProgram(self.program);
                     gl::BindFramebuffer(gl::FRAMEBUFFER, default_framebuffer);
-                    gl::Viewport(0,
-                                0,
-                                default_framebuffer_size.width as GLint,
-                                default_framebuffer_size.height as GLint);
+                    gl::Viewport(
+                        0,
+                        0,
+                        default_framebuffer_size.width as GLint,
+                        default_framebuffer_size.height as GLint,
+                    );
 
                     gl::ClearDepth(1.0);
                     gl::ClearStencil(0);
@@ -186,26 +196,30 @@ impl crate::Backend for Backend {
                     gl::Disable(gl::BLEND);
 
                     let mut depth = 0.0;
-                    self.render_opaque_layer_subtree(hosted_layer,
-                                                    &Point2D::zero(),
-                                                    &mut depth,
-                                                    tree_component,
-                                                    container_component,
-                                                    geometry_component,
-                                                    surface_component);
+                    self.render_opaque_layer_subtree(
+                        hosted_layer,
+                        &Point2D::zero(),
+                        &mut depth,
+                        tree_component,
+                        container_component,
+                        geometry_component,
+                        surface_component,
+                    );
 
                     gl::Disable(gl::DEPTH_TEST);
                     gl::BlendEquation(gl::FUNC_ADD);
                     gl::BlendFunc(gl::ONE, gl::ONE_MINUS_SRC_ALPHA);
                     gl::Enable(gl::BLEND);
 
-                    self.render_transparent_layer_subtree(hosted_layer,
-                                                          &Point2D::zero(),
-                                                          &mut depth,
-                                                          tree_component,
-                                                          container_component,
-                                                          geometry_component,
-                                                          surface_component);
+                    self.render_transparent_layer_subtree(
+                        hosted_layer,
+                        &Point2D::zero(),
+                        &mut depth,
+                        tree_component,
+                        container_component,
+                        geometry_component,
+                        surface_component,
+                    );
 
                     gl::Disable(gl::SCISSOR_TEST);
                     gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
@@ -228,9 +242,8 @@ impl crate::Backend for Backend {
     fn add_container_layer(&mut self, _: LayerId) {}
 
     fn add_surface_layer(&mut self, layer: LayerId) {
-        self.native_component.add(layer, LayerNativeInfo {
-            framebuffer: None,
-        });
+        self.native_component
+            .add(layer, LayerNativeInfo { framebuffer: None });
     }
 
     fn delete_layer(&mut self, layer: LayerId) {
@@ -251,34 +264,40 @@ impl crate::Backend for Backend {
 
     // Layer tree management
 
-    fn insert_before(&mut self,
-                     _: LayerId,
-                     new_child: LayerId,
-                     _: Option<LayerId>,
-                     tree_component: &LayerMap<LayerTreeInfo>,
-                     _: &LayerMap<LayerContainerInfo>,
-                     geometry_component: &LayerMap<LayerGeometryInfo>) {
+    fn insert_before(
+        &mut self,
+        _: LayerId,
+        new_child: LayerId,
+        _: Option<LayerId>,
+        tree_component: &LayerMap<LayerTreeInfo>,
+        _: &LayerMap<LayerContainerInfo>,
+        geometry_component: &LayerMap<LayerGeometryInfo>,
+    ) {
         let rect = Rect::new(Point2D::zero(), geometry_component[new_child].bounds.size);
         self.invalidate_layer(new_child, &rect, tree_component, geometry_component);
     }
 
-    fn remove_from_superlayer(&mut self,
-                              old_child: LayerId,
-                              parent: LayerId,
-                              tree_component: &LayerMap<LayerTreeInfo>,
-                              geometry_component: &LayerMap<LayerGeometryInfo>) {
+    fn remove_from_superlayer(
+        &mut self,
+        old_child: LayerId,
+        parent: LayerId,
+        tree_component: &LayerMap<LayerTreeInfo>,
+        geometry_component: &LayerMap<LayerGeometryInfo>,
+    ) {
         let rect = &geometry_component[old_child].bounds;
         self.invalidate_layer(parent, rect, tree_component, geometry_component);
     }
 
     // Native hosting
 
-    unsafe fn host_layer(&mut self,
-                         layer: LayerId,
-                         _: Self::Host,
-                         _: &LayerMap<LayerTreeInfo>,
-                         _: &LayerMap<LayerContainerInfo>,
-                         _: &LayerMap<LayerGeometryInfo>) {
+    unsafe fn host_layer(
+        &mut self,
+        layer: LayerId,
+        _: Self::Host,
+        _: &LayerMap<LayerTreeInfo>,
+        _: &LayerMap<LayerContainerInfo>,
+        _: &LayerMap<LayerGeometryInfo>,
+    ) {
         debug_assert!(self.hosted_layer.is_none());
         self.hosted_layer = Some(layer);
     }
@@ -290,20 +309,22 @@ impl crate::Backend for Backend {
 
     // Geometry
 
-    fn set_layer_bounds(&mut self,
-                        layer: LayerId,
-                        old_bounds: &Rect<f32>,
-                        tree_component: &LayerMap<LayerTreeInfo>,
-                        _: &LayerMap<LayerContainerInfo>,
-                        geometry_component: &LayerMap<LayerGeometryInfo>) {
+    fn set_layer_bounds(
+        &mut self,
+        layer: LayerId,
+        old_bounds: &Rect<f32>,
+        tree_component: &LayerMap<LayerTreeInfo>,
+        _: &LayerMap<LayerContainerInfo>,
+        geometry_component: &LayerMap<LayerGeometryInfo>,
+    ) {
         if let Some(tree_info) = tree_component.get(layer) {
             match tree_info.parent {
-                LayerParent::Layer(parent_layer) => {
-                    self.invalidate_layer(parent_layer,
-                                          old_bounds,
-                                          tree_component,
-                                          geometry_component)
-                }
+                LayerParent::Layer(parent_layer) => self.invalidate_layer(
+                    parent_layer,
+                    old_bounds,
+                    tree_component,
+                    geometry_component,
+                ),
                 LayerParent::NativeHost => {}
             }
         }
@@ -326,10 +347,12 @@ impl crate::Backend for Backend {
             }
         }
 
-        self.invalidate_layer(layer,
-                              &Rect::new(Point2D::zero(), new_size),
-                              tree_component,
-                              geometry_component);
+        self.invalidate_layer(
+            layer,
+            &Rect::new(Point2D::zero(), new_size),
+            tree_component,
+            geometry_component,
+        );
     }
 
     // Miscellaneous layer flags
@@ -338,12 +361,13 @@ impl crate::Backend for Backend {
 
     // OpenGL content binding
 
-    fn bind_layer_to_gl_context(&mut self,
-                                layer: LayerId,
-                                _: &mut Self::GLContext,
-                                geometry_component: &LayerMap<LayerGeometryInfo>,
-                                surface_component: &LayerMap<LayerSurfaceInfo>)
-                                -> Result<GLContextLayerBinding, ()> {
+    fn bind_layer_to_gl_context(
+        &mut self,
+        layer: LayerId,
+        _: &mut Self::GLContext,
+        geometry_component: &LayerMap<LayerGeometryInfo>,
+        surface_component: &LayerMap<LayerSurfaceInfo>,
+    ) -> Result<GLContextLayerBinding, ()> {
         let native_component = &mut self.native_component[layer];
 
         if native_component.framebuffer.is_none() {
@@ -360,46 +384,64 @@ impl crate::Backend for Backend {
                 gl::GenTextures(1, &mut framebuffer.color_texture);
                 gl::ActiveTexture(gl::TEXTURE0);
                 gl::BindTexture(gl::TEXTURE_2D, framebuffer.color_texture);
-                gl::TexImage2D(gl::TEXTURE_2D,
-                               0,
-                               gl::RGBA as GLint,
-                               framebuffer.size.width as GLint,
-                               framebuffer.size.height as GLint,
-                               0,
-                               gl::RGBA,
-                               gl::UNSIGNED_BYTE,
-                               ptr::null());
+                gl::TexImage2D(
+                    gl::TEXTURE_2D,
+                    0,
+                    gl::RGBA as GLint,
+                    framebuffer.size.width as GLint,
+                    framebuffer.size.height as GLint,
+                    0,
+                    gl::RGBA,
+                    gl::UNSIGNED_BYTE,
+                    ptr::null(),
+                );
                 gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as GLint);
                 gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as GLint);
-                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as GLint);
-                gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as GLint);
+                gl::TexParameteri(
+                    gl::TEXTURE_2D,
+                    gl::TEXTURE_WRAP_S,
+                    gl::CLAMP_TO_EDGE as GLint,
+                );
+                gl::TexParameteri(
+                    gl::TEXTURE_2D,
+                    gl::TEXTURE_WRAP_T,
+                    gl::CLAMP_TO_EDGE as GLint,
+                );
 
                 // Create depth/stencil renderbuffer, if necessary.
-                if framebuffer.surface_options
-                              .intersects(SurfaceOptions::DEPTH | SurfaceOptions::STENCIL) {
+                if framebuffer
+                    .surface_options
+                    .intersects(SurfaceOptions::DEPTH | SurfaceOptions::STENCIL)
+                {
                     let mut renderbuffer = 0;
                     gl::GenRenderbuffers(1, &mut renderbuffer);
                     gl::BindRenderbuffer(gl::RENDERBUFFER, renderbuffer);
-                    gl::RenderbufferStorage(gl::RENDERBUFFER,
-                                            gl::DEPTH24_STENCIL8,
-                                            framebuffer.size.width as GLint,
-                                            framebuffer.size.height as GLint);
+                    gl::RenderbufferStorage(
+                        gl::RENDERBUFFER,
+                        gl::DEPTH24_STENCIL8,
+                        framebuffer.size.width as GLint,
+                        framebuffer.size.height as GLint,
+                    );
                     framebuffer.depth_stencil_renderbuffer = Some(renderbuffer);
                 }
 
                 // Create FBO.
                 gl::GenFramebuffers(1, &mut framebuffer.framebuffer);
                 gl::BindFramebuffer(gl::FRAMEBUFFER, framebuffer.framebuffer);
-                gl::FramebufferTexture2D(gl::FRAMEBUFFER,
-                                         gl::COLOR_ATTACHMENT0,
-                                         gl::TEXTURE_2D,
-                                         framebuffer.color_texture,
-                                         0);
+                gl::FramebufferTexture2D(
+                    gl::FRAMEBUFFER,
+                    gl::COLOR_ATTACHMENT0,
+                    gl::TEXTURE_2D,
+                    framebuffer.color_texture,
+                    0,
+                );
                 if let Some(renderbuffer) = framebuffer.depth_stencil_renderbuffer {
-                    gl::FramebufferRenderbuffer(gl::FRAMEBUFFER,
-                                                gl::DEPTH_STENCIL_ATTACHMENT,
-                                                gl::RENDERBUFFER,
-                                                renderbuffer);
+                    gl::FramebufferRenderbuffer(
+                        gl::FRAMEBUFFER,
+                        gl::DEPTH_STENCIL_ATTACHMENT,
+                        gl::RENDERBUFFER,
+                        renderbuffer,
+                    );
                 }
             }
 
@@ -412,37 +454,41 @@ impl crate::Backend for Backend {
             gl::BindFramebuffer(gl::FRAMEBUFFER, framebuffer);
         }
 
-        Ok(GLContextLayerBinding {
-            layer,
-            framebuffer,
-        })
+        Ok(GLContextLayerBinding { layer, framebuffer })
     }
 
-    fn present_gl_context(&mut self,
-                          binding: GLContextLayerBinding,
-                          dirty_rect: &Rect<f32>,
-                          tree_component: &LayerMap<LayerTreeInfo>,
-                          geometry_component: &LayerMap<LayerGeometryInfo>)
-                          -> Result<(), ()> {
+    fn present_gl_context(
+        &mut self,
+        binding: GLContextLayerBinding,
+        dirty_rect: &Rect<f32>,
+        tree_component: &LayerMap<LayerTreeInfo>,
+        geometry_component: &LayerMap<LayerGeometryInfo>,
+    ) -> Result<(), ()> {
         unsafe {
             gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
         }
 
-        self.invalidate_layer(binding.layer, dirty_rect, tree_component, geometry_component);
+        self.invalidate_layer(
+            binding.layer,
+            dirty_rect,
+            tree_component,
+            geometry_component,
+        );
 
         Ok(())
     }
 
     // Screenshots
 
-    fn screenshot_hosted_layer(&mut self,
-                               root_layer: LayerId,
-                               render_promise: &Promise<()>,
-                               tree_component: &LayerMap<LayerTreeInfo>,
-                               _: &LayerMap<LayerContainerInfo>,
-                               geometry_component: &LayerMap<LayerGeometryInfo>,
-                               _: &LayerMap<LayerSurfaceInfo>)
-                               -> Promise<RgbaImage> {
+    fn screenshot_hosted_layer(
+        &mut self,
+        root_layer: LayerId,
+        render_promise: &Promise<()>,
+        tree_component: &LayerMap<LayerTreeInfo>,
+        _: &LayerMap<LayerContainerInfo>,
+        geometry_component: &LayerMap<LayerGeometryInfo>,
+        _: &LayerMap<LayerSurfaceInfo>,
+    ) -> Promise<RgbaImage> {
         let promise = Promise::new();
 
         let mut bounds = Rect::new(Point2D::zero(), geometry_component[root_layer].bounds.size);
@@ -450,7 +496,10 @@ impl crate::Backend for Backend {
         loop {
             bounds.origin += geometry_component[layer].bounds.origin.to_vector();
             match tree_component.get(layer) {
-                Some(LayerTreeInfo { parent: LayerParent::Layer(parent), .. }) => layer = *parent,
+                Some(LayerTreeInfo {
+                    parent: LayerParent::Layer(parent),
+                    ..
+                }) => layer = *parent,
                 Some(_) | None => break,
             }
         }
@@ -467,13 +516,15 @@ impl crate::Backend for Backend {
                 let bounds = screenshot_info.bounds;
                 let (width, height) = (bounds.size.width as usize, bounds.size.height as usize);
                 let mut pixels = vec![0; width * height * 4];
-                gl::ReadPixels(bounds.origin.x as GLint,
-                               bounds.origin.y as GLint,
-                               bounds.size.width as GLint,
-                               bounds.size.height as GLint,
-                               gl::RGBA,
-                               gl::UNSIGNED_BYTE,
-                               pixels.as_mut_ptr() as *mut _);
+                gl::ReadPixels(
+                    bounds.origin.x as GLint,
+                    bounds.origin.y as GLint,
+                    bounds.size.width as GLint,
+                    bounds.size.height as GLint,
+                    gl::RGBA,
+                    gl::UNSIGNED_BYTE,
+                    pixels.as_mut_ptr() as *mut _,
+                );
 
                 // Flip vertically.
                 for y0 in 0..(height / 2) {
@@ -483,9 +534,9 @@ impl crate::Backend for Backend {
                     }
                 }
 
-                screenshot_info.promise.resolve(RgbaImage::from_vec(bounds.size.width,
-                                                                    bounds.size.height,
-                                                                    pixels).unwrap());
+                screenshot_info.promise.resolve(
+                    RgbaImage::from_vec(bounds.size.width, bounds.size.height, pixels).unwrap(),
+                );
             }
         }));
 
@@ -506,14 +557,21 @@ impl crate::Backend for Backend {
     }
 
     #[cfg(all(feature = "enable-winit", feature = "enable-glutin"))]
-    fn host_layer_in_window(&mut self,
-                            layer: LayerId,
-                            tree_component: &LayerMap<LayerTreeInfo>,
-                            container_component: &LayerMap<LayerContainerInfo>,
-                            geometry_component: &LayerMap<LayerGeometryInfo>)
-                            -> Result<(), ()> {
+    fn host_layer_in_window(
+        &mut self,
+        layer: LayerId,
+        tree_component: &LayerMap<LayerTreeInfo>,
+        container_component: &LayerMap<LayerContainerInfo>,
+        geometry_component: &LayerMap<LayerGeometryInfo>,
+    ) -> Result<(), ()> {
         unsafe {
-            self.host_layer(layer, (), tree_component, container_component, geometry_component);
+            self.host_layer(
+                layer,
+                (),
+                tree_component,
+                container_component,
+                geometry_component,
+            );
             Ok(())
         }
     }
@@ -524,33 +582,34 @@ impl crate::Backend for Backend {
     }
 
     #[cfg(all(feature = "enable-winit", not(feature = "enable-glutin")))]
-    fn host_layer_in_window(&mut self,
-                            window: &Window,
-                            layer: LayerId,
-                            tree_component: &LayerMap<LayerTreeInfo>,
-                            container_component: &LayerMap<LayerContainerInfo>,
-                            geometry_component: &LayerMap<LayerGeometryInfo>)
-                            -> Result<(), ()> {
+    fn host_layer_in_window(
+        &mut self,
+        window: &Window,
+        layer: LayerId,
+        tree_component: &LayerMap<LayerTreeInfo>,
+        container_component: &LayerMap<LayerContainerInfo>,
+        geometry_component: &LayerMap<LayerGeometryInfo>,
+    ) -> Result<(), ()> {
         Err(())
     }
 }
 
 impl Backend {
-    fn invalidate_layer(&mut self,
-                        layer: LayerId,
-                        dirty_rect: &Rect<f32>,
-                        tree_component: &LayerMap<LayerTreeInfo>,
-                        geometry_component: &LayerMap<LayerGeometryInfo>) {
+    fn invalidate_layer(
+        &mut self,
+        layer: LayerId,
+        dirty_rect: &Rect<f32>,
+        tree_component: &LayerMap<LayerTreeInfo>,
+        geometry_component: &LayerMap<LayerGeometryInfo>,
+    ) {
         if let Some(tree_info) = tree_component.get(layer) {
             match tree_info.parent {
-                LayerParent::NativeHost => {
-                    match self.dirty_rect {
-                        None => self.dirty_rect = Some(*dirty_rect),
-                        Some(ref mut dirty_rect_ref) => {
-                            *dirty_rect_ref = dirty_rect.union(dirty_rect_ref)
-                        }
+                LayerParent::NativeHost => match self.dirty_rect {
+                    None => self.dirty_rect = Some(*dirty_rect),
+                    Some(ref mut dirty_rect_ref) => {
+                        *dirty_rect_ref = dirty_rect.union(dirty_rect_ref)
                     }
-                }
+                },
                 LayerParent::Layer(parent) => {
                     let parent_origin = geometry_component[layer].bounds.origin.to_vector();
                     let dirty_rect = dirty_rect.translate(&parent_origin);
@@ -560,14 +619,16 @@ impl Backend {
         }
     }
 
-    fn render_opaque_layer_subtree(&self,
-                                   layer: LayerId,
-                                   origin: &Point2D<f32>,
-                                   next_depth_value: &mut f32,
-                                   tree_component: &LayerMap<LayerTreeInfo>,
-                                   container_component: &LayerMap<LayerContainerInfo>,
-                                   geometry_component: &LayerMap<LayerGeometryInfo>,
-                                   surface_component: &LayerMap<LayerSurfaceInfo>) {
+    fn render_opaque_layer_subtree(
+        &self,
+        layer: LayerId,
+        origin: &Point2D<f32>,
+        next_depth_value: &mut f32,
+        tree_component: &LayerMap<LayerTreeInfo>,
+        container_component: &LayerMap<LayerContainerInfo>,
+        geometry_component: &LayerMap<LayerGeometryInfo>,
+        surface_component: &LayerMap<LayerSurfaceInfo>,
+    ) {
         let bounds = geometry_component[layer].bounds;
 
         // If this is a container layer, don't render anything; just recurse.
@@ -575,16 +636,18 @@ impl Backend {
             let new_origin = *origin + bounds.origin.to_vector();
             let mut maybe_kid = container_info.first_child;
             while let Some(kid) = maybe_kid {
-                self.render_opaque_layer_subtree(kid,
-                                                 &new_origin,
-                                                 next_depth_value,
-                                                 tree_component,
-                                                 container_component,
-                                                 geometry_component,
-                                                 surface_component);
+                self.render_opaque_layer_subtree(
+                    kid,
+                    &new_origin,
+                    next_depth_value,
+                    tree_component,
+                    container_component,
+                    geometry_component,
+                    surface_component,
+                );
                 maybe_kid = tree_component[kid].next_sibling;
             }
-            return
+            return;
         }
 
         // Assign a depth value.
@@ -592,21 +655,26 @@ impl Backend {
         *next_depth_value += DEPTH_QUANTUM;
 
         // Only consider the layers of the appropriate opacity.
-        if !surface_component[layer].options.contains(SurfaceOptions::OPAQUE) {
-            return
+        if !surface_component[layer]
+            .options
+            .contains(SurfaceOptions::OPAQUE)
+        {
+            return;
         }
 
         self.render_layer(layer, origin, depth, geometry_component);
     }
 
-    fn render_transparent_layer_subtree(&self,
-                                        layer: LayerId,
-                                        origin: &Point2D<f32>,
-                                        next_depth_value: &mut f32,
-                                        tree_component: &LayerMap<LayerTreeInfo>,
-                                        container_component: &LayerMap<LayerContainerInfo>,
-                                        geometry_component: &LayerMap<LayerGeometryInfo>,
-                                        surface_component: &LayerMap<LayerSurfaceInfo>) {
+    fn render_transparent_layer_subtree(
+        &self,
+        layer: LayerId,
+        origin: &Point2D<f32>,
+        next_depth_value: &mut f32,
+        tree_component: &LayerMap<LayerTreeInfo>,
+        container_component: &LayerMap<LayerContainerInfo>,
+        geometry_component: &LayerMap<LayerGeometryInfo>,
+        surface_component: &LayerMap<LayerSurfaceInfo>,
+    ) {
         let bounds = geometry_component[layer].bounds;
 
         // If this is a container layer, don't render anything; just recurse.
@@ -614,16 +682,18 @@ impl Backend {
             let new_origin = *origin + bounds.origin.to_vector();
             let mut maybe_kid = container_info.last_child;
             while let Some(kid) = maybe_kid {
-                self.render_transparent_layer_subtree(kid,
-                                                      &new_origin,
-                                                      next_depth_value,
-                                                      tree_component,
-                                                      container_component,
-                                                      geometry_component,
-                                                      surface_component);
+                self.render_transparent_layer_subtree(
+                    kid,
+                    &new_origin,
+                    next_depth_value,
+                    tree_component,
+                    container_component,
+                    geometry_component,
+                    surface_component,
+                );
                 maybe_kid = tree_component[kid].prev_sibling;
             }
-            return
+            return;
         }
 
         // Assign a depth value.
@@ -631,18 +701,23 @@ impl Backend {
         let depth = *next_depth_value;
 
         // Only consider the layers of the appropriate opacity.
-        if surface_component[layer].options.contains(SurfaceOptions::OPAQUE) {
-            return
+        if surface_component[layer]
+            .options
+            .contains(SurfaceOptions::OPAQUE)
+        {
+            return;
         }
 
         self.render_layer(layer, origin, depth, geometry_component);
     }
 
-    fn render_layer(&self,
-                    layer: LayerId,
-                    origin: &Point2D<f32>,
-                    depth: f32,
-                    geometry_component: &LayerMap<LayerGeometryInfo>) {
+    fn render_layer(
+        &self,
+        layer: LayerId,
+        origin: &Point2D<f32>,
+        depth: f32,
+        geometry_component: &LayerMap<LayerGeometryInfo>,
+    ) {
         let color_texture = match self.native_component[layer].framebuffer {
             Some(ref framebuffer) => framebuffer.color_texture,
             None => return,
@@ -654,13 +729,23 @@ impl Backend {
         unsafe {
             // Set uniforms.
             gl::Uniform1f(self.uniform_depth, depth);
-            gl::UniformMatrix2fv(self.uniform_scale, 1, gl::FALSE, [
-                2.0 * bounds.size.width / framebuffer_size.width, 0.0,
-                0.0, 2.0 * bounds.size.height / framebuffer_size.height,
-            ].as_ptr());
-            gl::Uniform2f(self.uniform_translation,
-                          2.0 * (origin.x + bounds.origin.x) / framebuffer_size.width - 1.0,
-                          2.0 * (origin.y + bounds.origin.y) / framebuffer_size.height - 1.0);
+            gl::UniformMatrix2fv(
+                self.uniform_scale,
+                1,
+                gl::FALSE,
+                [
+                    2.0 * bounds.size.width / framebuffer_size.width,
+                    0.0,
+                    0.0,
+                    2.0 * bounds.size.height / framebuffer_size.height,
+                ]
+                .as_ptr(),
+            );
+            gl::Uniform2f(
+                self.uniform_translation,
+                2.0 * (origin.x + bounds.origin.x) / framebuffer_size.width - 1.0,
+                2.0 * (origin.y + bounds.origin.y) / framebuffer_size.height - 1.0,
+            );
 
             // Bind texture.
             gl::ActiveTexture(gl::TEXTURE0);
@@ -720,8 +805,9 @@ struct Interface {
 
 impl Interface {
     fn new(window_builder: WindowBuilder, events_loop: &EventsLoop) -> Interface {
-        let context = ContextBuilder::new().with_gl(GlRequest::Specific(Api::OpenGl, (3, 3)))
-                                           .with_gl_profile(GlProfile::Core);
+        let context = ContextBuilder::new()
+            .with_gl(GlRequest::Specific(Api::OpenGl, (3, 3)))
+            .with_gl_profile(GlProfile::Core);
         Interface {
             gl_window: GlWindow::new(window_builder, context, events_loop).unwrap(),
         }
@@ -760,11 +846,12 @@ impl GLInterface for Interface {
     }
 
     fn default_framebuffer_size(&self) -> Size2D<u32> {
-        let (width, height) = self.gl_window
-                                  .get_inner_size()
-                                  .unwrap()
-                                  .to_physical(self.gl_window.get_hidpi_factor())
-                                  .into();
+        let (width, height) = self
+            .gl_window
+            .get_inner_size()
+            .unwrap()
+            .to_physical(self.gl_window.get_hidpi_factor())
+            .into();
         Size2D::new(width, height)
     }
 
@@ -776,7 +863,12 @@ impl GLInterface for Interface {
 
 unsafe fn create_shader(kind: GLuint, source: &[u8]) -> GLuint {
     let shader = gl::CreateShader(kind);
-    gl::ShaderSource(shader, 1, &(source.as_ptr() as *const GLchar), &(source.len() as GLint));
+    gl::ShaderSource(
+        shader,
+        1,
+        &(source.as_ptr() as *const GLchar),
+        &(source.len() as GLint),
+    );
     gl::CompileShader(shader);
 
     let mut compile_status = gl::FALSE as GLint;
@@ -784,15 +876,19 @@ unsafe fn create_shader(kind: GLuint, source: &[u8]) -> GLuint {
 
     if compile_status != gl::TRUE as GLint {
         let (mut log, mut log_len) = (vec![0u8; 65536], 0);
-        gl::GetShaderInfoLog(shader,
-                             log.len() as GLint,
-                             &mut log_len,
-                             log.as_mut_ptr() as *mut GLchar);
+        gl::GetShaderInfoLog(
+            shader,
+            log.len() as GLint,
+            &mut log_len,
+            log.as_mut_ptr() as *mut GLchar,
+        );
         log.truncate(log_len as usize);
-        eprintln!("Failed to compile shader ({}/{}): {}",
-                  log_len,
-                  compile_status,
-                  String::from_utf8_lossy(&log));
+        eprintln!(
+            "Failed to compile shader ({}/{}): {}",
+            log_len,
+            compile_status,
+            String::from_utf8_lossy(&log)
+        );
         panic!("Shader compilation failed")
     }
 
@@ -802,12 +898,7 @@ unsafe fn create_shader(kind: GLuint, source: &[u8]) -> GLuint {
 // 4,000 layers should be enough for anybody…
 const DEPTH_QUANTUM: f32 = 1.0 / 4096.0;
 
-static VERTEX_BUFFER_DATA: [i8; 16] = [
-    0, 0, 0, 0,
-    1, 0, 1, 0,
-    0, 1, 0, 1,
-    1, 1, 1, 1,
-];
+static VERTEX_BUFFER_DATA: [i8; 16] = [0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 1, 1, 1, 1];
 
 static VERTEX_SHADER_SOURCE: &'static [u8] = b"\
     #version 330
