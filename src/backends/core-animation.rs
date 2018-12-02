@@ -11,34 +11,34 @@
 //! Core Animation native system implementation.
 
 use block::ConcreteBlock;
+use cgl::{kCGLNoError, kCGLPFAOpenGLProfile, CGLSetCurrentContext};
 use cgl::{CGLChoosePixelFormat, CGLContextObj, CGLCreateContext, CGLPixelFormatAttribute};
-use cgl::{CGLSetCurrentContext, kCGLNoError, kCGLPFAOpenGLProfile};
-use cocoa::base::{NO, YES, id, nil};
+use cocoa::base::{id, nil, NO, YES};
 use cocoa::foundation::{NSPoint, NSRect, NSSize};
-use cocoa::quartzcore::{CALayer, transaction};
+use cocoa::quartzcore::{transaction, CALayer};
 use core_foundation::base::TCFType;
 use core_foundation::bundle::CFBundle;
 use core_foundation::dictionary::CFDictionary;
 use core_foundation::number::CFNumber;
 use core_foundation::string::CFString;
 use core_graphics::base::CGFloat;
-use core_graphics::geometry::{CG_ZERO_POINT, CGPoint, CGRect, CGSize};
-use core_graphics::window::{self, CGWindowID, kCGWindowImageBestResolution};
+use core_graphics::geometry::{CGPoint, CGRect, CGSize, CG_ZERO_POINT};
+use core_graphics::window::{self, kCGWindowImageBestResolution, CGWindowID};
 use core_graphics::window::{kCGWindowImageBoundsIgnoreFraming, kCGWindowListOptionAll};
 use euclid::{Rect, Size2D};
-use gl::types::{GLint, GLuint};
 use gl;
+use gl::types::{GLint, GLuint};
 use image::RgbaImage;
 use io_surface::IOSurface;
 use std::ptr;
 use std::sync::Mutex;
 
 #[cfg(feature = "enable-winit")]
-use winit::Window;
-#[cfg(feature = "enable-winit")]
 use winit::os::macos::WindowExt;
+#[cfg(feature = "enable-winit")]
+use winit::Window;
 
-use crate::{Connection, ConnectionError, GLAPI, GLContextLayerBinding, LayerContainerInfo};
+use crate::{Connection, ConnectionError, GLContextLayerBinding, LayerContainerInfo, GLAPI};
 use crate::{LayerGeometryInfo, LayerId, LayerMap, LayerParent, LayerSurfaceInfo, LayerTreeInfo};
 use crate::{Promise, SurfaceOptions};
 
@@ -84,26 +84,25 @@ impl crate::Backend for Backend {
         let mut cgl_context = ptr::null_mut();
         unsafe {
             let (mut pixel_format, mut pixel_format_count) = (ptr::null_mut(), 0);
-            if CGLChoosePixelFormat(attributes.as_mut_ptr(),
-                                    &mut pixel_format,
-                                    &mut pixel_format_count) != kCGLNoError {
-                return Err(())
+            if CGLChoosePixelFormat(
+                attributes.as_mut_ptr(),
+                &mut pixel_format,
+                &mut pixel_format_count,
+            ) != kCGLNoError
+            {
+                return Err(());
             }
 
             if CGLCreateContext(pixel_format, ptr::null_mut(), &mut cgl_context) != kCGLNoError {
-                return Err(())
+                return Err(());
             }
         }
 
-        unsafe {
-            self.wrap_gl_context(cgl_context)
-        }
+        unsafe { self.wrap_gl_context(cgl_context) }
     }
 
     unsafe fn wrap_gl_context(&mut self, cgl_context: CGLContextObj) -> Result<GLContext, ()> {
-        Ok(GLContext {
-            cgl_context,
-        })
+        Ok(GLContext { cgl_context })
     }
 
     #[inline]
@@ -118,12 +117,14 @@ impl crate::Backend for Backend {
         transaction::set_disable_actions(true);
     }
 
-    fn end_transaction(&mut self,
-                       promise: &Promise<()>,
-                       _: &LayerMap<LayerTreeInfo>,
-                       _: &LayerMap<LayerContainerInfo>,
-                       _: &LayerMap<LayerGeometryInfo>,
-                       _: &LayerMap<LayerSurfaceInfo>) {
+    fn end_transaction(
+        &mut self,
+        promise: &Promise<()>,
+        _: &LayerMap<LayerTreeInfo>,
+        _: &LayerMap<LayerContainerInfo>,
+        _: &LayerMap<LayerGeometryInfo>,
+        _: &LayerMap<LayerSurfaceInfo>,
+    ) {
         let promise = Mutex::new(Some((*promise).clone()));
         transaction::set_completion_block(ConcreteBlock::new(move || {
             (*promise.lock().unwrap()).take().unwrap().resolve(())
@@ -136,11 +137,14 @@ impl crate::Backend for Backend {
         let layer = CALayer::new();
         layer.set_anchor_point(&CG_ZERO_POINT);
 
-        self.native_component.add(new_layer, NativeInfo {
-            host: nil,
-            core_animation_layer: layer,
-            surface: None,
-        });
+        self.native_component.add(
+            new_layer,
+            NativeInfo {
+                host: nil,
+                core_animation_layer: layer,
+                surface: None,
+            },
+        );
     }
 
     fn add_surface_layer(&mut self, new_layer: LayerId) {
@@ -151,13 +155,15 @@ impl crate::Backend for Backend {
         self.native_component.remove_if_present(layer);
     }
 
-    fn insert_before(&mut self,
-                     parent: LayerId,
-                     new_child: LayerId,
-                     reference: Option<LayerId>,
-                     tree_component: &LayerMap<LayerTreeInfo>,
-                     container_component: &LayerMap<LayerContainerInfo>,
-                     geometry_component: &LayerMap<LayerGeometryInfo>) {
+    fn insert_before(
+        &mut self,
+        parent: LayerId,
+        new_child: LayerId,
+        reference: Option<LayerId>,
+        tree_component: &LayerMap<LayerTreeInfo>,
+        container_component: &LayerMap<LayerContainerInfo>,
+        geometry_component: &LayerMap<LayerGeometryInfo>,
+    ) {
         let parent = &self.native_component[parent].core_animation_layer;
         let new_core_animation_child = &self.native_component[new_child].core_animation_layer;
         match reference {
@@ -168,41 +174,51 @@ impl crate::Backend for Backend {
             }
         }
 
-        self.update_layer_subtree_bounds(new_child,
-                                         tree_component,
-                                         container_component,
-                                         geometry_component);
+        self.update_layer_subtree_bounds(
+            new_child,
+            tree_component,
+            container_component,
+            geometry_component,
+        );
     }
 
-    fn remove_from_superlayer(&mut self,
-                              layer: LayerId,
-                              _: LayerId,
-                              _: &LayerMap<LayerTreeInfo>,
-                              _: &LayerMap<LayerGeometryInfo>) {
-        self.native_component[layer].core_animation_layer.remove_from_superlayer()
+    fn remove_from_superlayer(
+        &mut self,
+        layer: LayerId,
+        _: LayerId,
+        _: &LayerMap<LayerTreeInfo>,
+        _: &LayerMap<LayerGeometryInfo>,
+    ) {
+        self.native_component[layer]
+            .core_animation_layer
+            .remove_from_superlayer()
     }
 
     // Increases the reference count of `hosting_view`.
-    unsafe fn host_layer(&mut self,
-                         layer: LayerId,
-                         host: id,
-                         tree_component: &LayerMap<LayerTreeInfo>,
-                         container_component: &LayerMap<LayerContainerInfo>,
-                         geometry_component: &LayerMap<LayerGeometryInfo>) {
+    unsafe fn host_layer(
+        &mut self,
+        layer: LayerId,
+        host: id,
+        tree_component: &LayerMap<LayerTreeInfo>,
+        container_component: &LayerMap<LayerContainerInfo>,
+        geometry_component: &LayerMap<LayerGeometryInfo>,
+    ) {
         let native_component = &mut self.native_component[layer];
         debug_assert_eq!(native_component.host, nil);
 
         let core_animation_layer = &native_component.core_animation_layer;
         msg_send![host, retain];
         msg_send![host, setLayer:core_animation_layer.id()];
-        msg_send![host, setWantsLayer:YES];
+        msg_send![host, setWantsLayer: YES];
 
         native_component.host = host;
 
-        self.update_layer_subtree_bounds(layer,
-                                         tree_component,
-                                         container_component,
-                                         geometry_component);
+        self.update_layer_subtree_bounds(
+            layer,
+            tree_component,
+            container_component,
+            geometry_component,
+        );
     }
 
     fn unhost_layer(&mut self, layer: LayerId) {
@@ -210,26 +226,30 @@ impl crate::Backend for Backend {
         debug_assert_ne!(native_component.host, nil);
 
         unsafe {
-            msg_send![native_component.host, setWantsLayer:NO];
-            msg_send![native_component.host, setLayer:nil];
+            msg_send![native_component.host, setWantsLayer: NO];
+            msg_send![native_component.host, setLayer: nil];
             msg_send![native_component.host, release];
         }
 
         native_component.host = nil;
     }
 
-    fn set_layer_bounds(&mut self,
-                        layer: LayerId,
-                        _: &Rect<f32>,
-                        tree_component: &LayerMap<LayerTreeInfo>,
-                        _: &LayerMap<LayerContainerInfo>,
-                        geometry_component: &LayerMap<LayerGeometryInfo>) {
+    fn set_layer_bounds(
+        &mut self,
+        layer: LayerId,
+        _: &Rect<f32>,
+        tree_component: &LayerMap<LayerTreeInfo>,
+        _: &LayerMap<LayerContainerInfo>,
+        geometry_component: &LayerMap<LayerGeometryInfo>,
+    ) {
         self.update_layer_bounds(layer, tree_component, geometry_component);
     }
 
-    fn set_layer_surface_options(&mut self,
-                                 layer: LayerId,
-                                 surface_component: &LayerMap<LayerSurfaceInfo>) {
+    fn set_layer_surface_options(
+        &mut self,
+        layer: LayerId,
+        surface_component: &LayerMap<LayerSurfaceInfo>,
+    ) {
         let surface_options = surface_component[layer].options;
 
         let core_animation_layer = &mut self.native_component[layer].core_animation_layer;
@@ -239,22 +259,24 @@ impl crate::Backend for Backend {
     }
 
     // TODO(pcwalton): Support depth and stencil!
-    fn bind_layer_to_gl_context(&mut self,
-                                layer: LayerId,
-                                context: &mut Self::GLContext,
-                                geometry_component: &LayerMap<LayerGeometryInfo>,
-                                _: &LayerMap<LayerSurfaceInfo>)
-                                -> Result<GLContextLayerBinding, ()> {
+    fn bind_layer_to_gl_context(
+        &mut self,
+        layer: LayerId,
+        context: &mut Self::GLContext,
+        geometry_component: &LayerMap<LayerGeometryInfo>,
+        _: &LayerMap<LayerSurfaceInfo>,
+    ) -> Result<GLContextLayerBinding, ()> {
         let native_component = &mut self.native_component[layer];
         let layer_size = geometry_component[layer].bounds.size.round().to_u32();
         unsafe {
             if CGLSetCurrentContext(context.cgl_context) != kCGLNoError {
-                return Err(())
+                return Err(());
             }
 
             // FIXME(pcwalton): Verify that GL objects belong to the right context!
-            if native_component.surface.is_none() ||
-                    native_component.surface.as_ref().unwrap().size != layer_size {
+            if native_component.surface.is_none()
+                || native_component.surface.as_ref().unwrap().size != layer_size
+            {
                 native_component.surface = Some(Surface::new(&layer_size));
             }
 
@@ -263,14 +285,17 @@ impl crate::Backend for Backend {
             native_component.core_animation_layer.set_contents(contents);
 
             gl::BindTexture(gl::TEXTURE_RECTANGLE, surface.texture);
-            surface.io_surface.bind_to_gl_texture(layer_size.width as i32,
-                                                  layer_size.height as i32);
+            surface
+                .io_surface
+                .bind_to_gl_texture(layer_size.width as i32, layer_size.height as i32);
             gl::BindFramebuffer(gl::FRAMEBUFFER, surface.framebuffer);
-            gl::FramebufferTexture2D(gl::FRAMEBUFFER,
-                                     gl::COLOR_ATTACHMENT0,
-                                     gl::TEXTURE_RECTANGLE,
-                                     surface.texture,
-                                     0);
+            gl::FramebufferTexture2D(
+                gl::FRAMEBUFFER,
+                gl::COLOR_ATTACHMENT0,
+                gl::TEXTURE_RECTANGLE,
+                surface.texture,
+                0,
+            );
 
             Ok(GLContextLayerBinding {
                 layer,
@@ -279,17 +304,18 @@ impl crate::Backend for Backend {
         }
     }
 
-    fn present_gl_context(&mut self,
-                          binding: GLContextLayerBinding,
-                          _: &Rect<f32>,
-                          _: &LayerMap<LayerTreeInfo>,
-                          _: &LayerMap<LayerGeometryInfo>)
-                          -> Result<(), ()> {
+    fn present_gl_context(
+        &mut self,
+        binding: GLContextLayerBinding,
+        _: &Rect<f32>,
+        _: &LayerMap<LayerTreeInfo>,
+        _: &LayerMap<LayerGeometryInfo>,
+    ) -> Result<(), ()> {
         unsafe {
             gl::Flush();
 
             if CGLSetCurrentContext(ptr::null_mut()) != kCGLNoError {
-                return Err(())
+                return Err(());
             }
         }
 
@@ -302,14 +328,15 @@ impl crate::Backend for Backend {
 
     // Screenshots
 
-    fn screenshot_hosted_layer(&mut self,
-                               layer: LayerId,
-                               transaction_promise: &Promise<()>,
-                               _: &LayerMap<LayerTreeInfo>,
-                               _: &LayerMap<LayerContainerInfo>,
-                               _: &LayerMap<LayerGeometryInfo>,
-                               _: &LayerMap<LayerSurfaceInfo>)
-                               -> Promise<RgbaImage> {
+    fn screenshot_hosted_layer(
+        &mut self,
+        layer: LayerId,
+        transaction_promise: &Promise<()>,
+        _: &LayerMap<LayerTreeInfo>,
+        _: &LayerMap<LayerContainerInfo>,
+        _: &LayerMap<LayerGeometryInfo>,
+        _: &LayerMap<LayerSurfaceInfo>,
+    ) -> Promise<RgbaImage> {
         let result_promise = Promise::new();
         let result_promise_to_return = result_promise.clone();
 
@@ -331,18 +358,21 @@ impl crate::Backend for Backend {
 
                 let screen: id = msg_send![window, screen];
                 let screen_frame: NSRect = msg_send![screen, frame];
-                let screen_rect = CGRect::new(&CGPoint::new(view_frame.origin.x,
-                                                            screen_frame.size.height -
-                                                            view_frame.origin.y -
-                                                            view_frame.size.height),
-                                              &CGSize::new(view_frame.size.width,
-                                                           view_frame.size.height));
+                let screen_rect = CGRect::new(
+                    &CGPoint::new(
+                        view_frame.origin.x,
+                        screen_frame.size.height - view_frame.origin.y - view_frame.size.height,
+                    ),
+                    &CGSize::new(view_frame.size.width, view_frame.size.height),
+                );
 
-                image = window::create_image(screen_rect,
-                                             kCGWindowListOptionAll,
-                                             window_id,
-                                             kCGWindowImageBoundsIgnoreFraming |
-                                             kCGWindowImageBestResolution).unwrap();
+                image = window::create_image(
+                    screen_rect,
+                    kCGWindowListOptionAll,
+                    window_id,
+                    kCGWindowImageBoundsIgnoreFraming | kCGWindowImageBestResolution,
+                )
+                .unwrap();
             }
 
             let (width, height) = (image.width() as u32, image.height() as u32);
@@ -362,103 +392,121 @@ impl crate::Backend for Backend {
     }
 
     #[cfg(feature = "enable-winit")]
-    fn host_layer_in_window(&mut self,
-                            layer: LayerId,
-                            tree_component: &LayerMap<LayerTreeInfo>,
-                            container_component: &LayerMap<LayerContainerInfo>,
-                            geometry_component: &LayerMap<LayerGeometryInfo>)
-                            -> Result<(), ()> {
+    fn host_layer_in_window(
+        &mut self,
+        layer: LayerId,
+        tree_component: &LayerMap<LayerTreeInfo>,
+        container_component: &LayerMap<LayerContainerInfo>,
+        geometry_component: &LayerMap<LayerGeometryInfo>,
+    ) -> Result<(), ()> {
         unsafe {
-            self.host_layer(layer,
-                            self.window().ok_or(())?.get_nsview() as id,
-                            tree_component,
-                            container_component,
-                            geometry_component);
+            self.host_layer(
+                layer,
+                self.window().ok_or(())?.get_nsview() as id,
+                tree_component,
+                container_component,
+                geometry_component,
+            );
             Ok(())
         }
     }
 }
 
 impl Backend {
-    fn hosting_view(&self, layer: LayerId, tree_component: &LayerMap<LayerTreeInfo>)
-                    -> Option<id> {
+    fn hosting_view(&self, layer: LayerId, tree_component: &LayerMap<LayerTreeInfo>) -> Option<id> {
         match tree_component.get(layer) {
             None => None,
-            Some(LayerTreeInfo { parent: LayerParent::Layer(parent_layer), .. }) => {
-                self.hosting_view(*parent_layer, tree_component)
-            }
-            Some(LayerTreeInfo { parent: LayerParent::NativeHost, .. }) => {
-                Some(self.native_component[layer].host)
-            }
+            Some(LayerTreeInfo {
+                parent: LayerParent::Layer(parent_layer),
+                ..
+            }) => self.hosting_view(*parent_layer, tree_component),
+            Some(LayerTreeInfo {
+                parent: LayerParent::NativeHost,
+                ..
+            }) => Some(self.native_component[layer].host),
         }
     }
 
-    fn update_layer_bounds_with_hosting_view(&mut self,
-                                             layer: LayerId,
-                                             hosting_view: id,
-                                             geometry_component: &LayerMap<LayerGeometryInfo>) {
+    fn update_layer_bounds_with_hosting_view(
+        &mut self,
+        layer: LayerId,
+        hosting_view: id,
+        geometry_component: &LayerMap<LayerGeometryInfo>,
+    ) {
         let new_bounds: Rect<CGFloat> = match geometry_component.get(layer) {
             None => return,
             Some(geometry_info) => geometry_info.bounds.to_f64(),
         };
 
-        let new_appkit_bounds =
-            NSRect::new(NSPoint::new(new_bounds.origin.x, new_bounds.origin.y),
-                        NSSize::new(new_bounds.size.width, new_bounds.size.height));
-        let new_appkit_bounds: NSRect = unsafe {
-            msg_send![hosting_view, convertRectFromBacking:new_appkit_bounds]
-        };
+        let new_appkit_bounds = NSRect::new(
+            NSPoint::new(new_bounds.origin.x, new_bounds.origin.y),
+            NSSize::new(new_bounds.size.width, new_bounds.size.height),
+        );
+        let new_appkit_bounds: NSRect =
+            unsafe { msg_send![hosting_view, convertRectFromBacking: new_appkit_bounds] };
 
-        let new_core_animation_bounds =
-            CGRect::new(&CG_ZERO_POINT,
-                        &CGSize::new(new_appkit_bounds.size.width, new_appkit_bounds.size.height));
+        let new_core_animation_bounds = CGRect::new(
+            &CG_ZERO_POINT,
+            &CGSize::new(new_appkit_bounds.size.width, new_appkit_bounds.size.height),
+        );
 
         let core_animation_layer = &self.native_component[layer].core_animation_layer;
         core_animation_layer.set_bounds(&new_core_animation_bounds);
-        core_animation_layer.set_position(&CGPoint::new(new_appkit_bounds.origin.x,
-                                                        new_appkit_bounds.origin.y));
+        core_animation_layer.set_position(&CGPoint::new(
+            new_appkit_bounds.origin.x,
+            new_appkit_bounds.origin.y,
+        ));
     }
 
     fn update_layer_subtree_bounds_with_hosting_view(
-            &mut self,
-            layer: LayerId,
-            hosting_view: id,
-            tree_component: &LayerMap<LayerTreeInfo>,
-            container_component: &LayerMap<LayerContainerInfo>,
-            geometry_component: &LayerMap<LayerGeometryInfo>) {
+        &mut self,
+        layer: LayerId,
+        hosting_view: id,
+        tree_component: &LayerMap<LayerTreeInfo>,
+        container_component: &LayerMap<LayerContainerInfo>,
+        geometry_component: &LayerMap<LayerGeometryInfo>,
+    ) {
         self.update_layer_bounds_with_hosting_view(layer, hosting_view, geometry_component);
 
         if let Some(container_info) = container_component.get(layer) {
             let mut maybe_kid = container_info.first_child;
             while let Some(kid) = maybe_kid {
-                self.update_layer_subtree_bounds_with_hosting_view(kid,
-                                                                   hosting_view,
-                                                                   tree_component,
-                                                                   container_component,
-                                                                   geometry_component);
+                self.update_layer_subtree_bounds_with_hosting_view(
+                    kid,
+                    hosting_view,
+                    tree_component,
+                    container_component,
+                    geometry_component,
+                );
                 maybe_kid = tree_component[kid].next_sibling;
             }
         }
     }
 
-    fn update_layer_subtree_bounds(&mut self,
-                                   layer: LayerId,
-                                   tree_component: &LayerMap<LayerTreeInfo>,
-                                   container_component: &LayerMap<LayerContainerInfo>,
-                                   geometry_component: &LayerMap<LayerGeometryInfo>) {
+    fn update_layer_subtree_bounds(
+        &mut self,
+        layer: LayerId,
+        tree_component: &LayerMap<LayerTreeInfo>,
+        container_component: &LayerMap<LayerContainerInfo>,
+        geometry_component: &LayerMap<LayerGeometryInfo>,
+    ) {
         if let Some(hosting_view) = self.hosting_view(layer, tree_component) {
-            self.update_layer_subtree_bounds_with_hosting_view(layer,
-                                                               hosting_view,
-                                                               tree_component,
-                                                               container_component,
-                                                               geometry_component)
+            self.update_layer_subtree_bounds_with_hosting_view(
+                layer,
+                hosting_view,
+                tree_component,
+                container_component,
+                geometry_component,
+            )
         }
     }
 
-    fn update_layer_bounds(&mut self,
-                           layer: LayerId,
-                           tree_component: &LayerMap<LayerTreeInfo>,
-                           geometry_component: &LayerMap<LayerGeometryInfo>) {
+    fn update_layer_bounds(
+        &mut self,
+        layer: LayerId,
+        tree_component: &LayerMap<LayerTreeInfo>,
+        geometry_component: &LayerMap<LayerGeometryInfo>,
+    ) {
         if let Some(hosting_view) = self.hosting_view(layer, tree_component) {
             self.update_layer_bounds_with_hosting_view(layer, hosting_view, geometry_component)
         }
@@ -525,14 +573,26 @@ impl Surface {
             gl::GenFramebuffers(1, &mut framebuffer);
             gl::GenTextures(1, &mut texture);
             gl::BindTexture(gl::TEXTURE_RECTANGLE, texture);
-            gl::TexParameteri(gl::TEXTURE_RECTANGLE, gl::TEXTURE_MIN_FILTER, gl::LINEAR as GLint);
-            gl::TexParameteri(gl::TEXTURE_RECTANGLE, gl::TEXTURE_MAG_FILTER, gl::LINEAR as GLint);
-            gl::TexParameteri(gl::TEXTURE_RECTANGLE,
-                              gl::TEXTURE_WRAP_S,
-                              gl::CLAMP_TO_EDGE as GLint);
-            gl::TexParameteri(gl::TEXTURE_RECTANGLE,
-                              gl::TEXTURE_WRAP_T,
-                              gl::CLAMP_TO_EDGE as GLint);
+            gl::TexParameteri(
+                gl::TEXTURE_RECTANGLE,
+                gl::TEXTURE_MIN_FILTER,
+                gl::LINEAR as GLint,
+            );
+            gl::TexParameteri(
+                gl::TEXTURE_RECTANGLE,
+                gl::TEXTURE_MAG_FILTER,
+                gl::LINEAR as GLint,
+            );
+            gl::TexParameteri(
+                gl::TEXTURE_RECTANGLE,
+                gl::TEXTURE_WRAP_S,
+                gl::CLAMP_TO_EDGE as GLint,
+            );
+            gl::TexParameteri(
+                gl::TEXTURE_RECTANGLE,
+                gl::TEXTURE_WRAP_T,
+                gl::CLAMP_TO_EDGE as GLint,
+            );
         }
 
         Surface {
@@ -544,13 +604,25 @@ impl Surface {
     }
 
     fn create_io_surface(size: &Size2D<u32>) -> IOSurface {
-        const BGRA: u32 = 0x42475241;   // 'BGRA'
+        const BGRA: u32 = 0x42475241; // 'BGRA'
 
         io_surface::new(&CFDictionary::from_CFType_pairs(&[
-            (CFString::from("IOSurfaceWidth"), CFNumber::from(size.width as i32).as_CFType()),
-            (CFString::from("IOSurfaceHeight"), CFNumber::from(size.height as i32).as_CFType()),
-            (CFString::from("IOSurfaceBytesPerElement"), CFNumber::from(4).as_CFType()),
-            (CFString::from("IOSurfacePixelFormat"), CFNumber::from(BGRA as i32).as_CFType()),
+            (
+                CFString::from("IOSurfaceWidth"),
+                CFNumber::from(size.width as i32).as_CFType(),
+            ),
+            (
+                CFString::from("IOSurfaceHeight"),
+                CFNumber::from(size.height as i32).as_CFType(),
+            ),
+            (
+                CFString::from("IOSurfaceBytesPerElement"),
+                CFNumber::from(4).as_CFType(),
+            ),
+            (
+                CFString::from("IOSurfacePixelFormat"),
+                CFNumber::from(BGRA as i32).as_CFType(),
+            ),
         ]))
     }
 }

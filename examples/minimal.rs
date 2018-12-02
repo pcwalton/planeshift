@@ -22,11 +22,12 @@ pub fn main() {
 
     // Get our size.
     let hidpi_factor = context.window().unwrap().get_hidpi_factor();
-    let window_size = context.window()
-                             .unwrap()
-                             .get_inner_size()
-                             .unwrap()
-                             .to_physical(hidpi_factor);
+    let window_size = context
+        .window()
+        .unwrap()
+        .get_inner_size()
+        .unwrap()
+        .to_physical(hidpi_factor);
     let (width, height): (u32, u32) = window_size.into();
 
     let layer_size = Size2D::new(window_size.width as f32, window_size.height as f32);
@@ -39,20 +40,28 @@ pub fn main() {
     let mut gl_context = context.create_gl_context(surface_options).unwrap();
 
     // Draw.
-    let binding = context.bind_layer_to_gl_context(layer, &mut gl_context).unwrap();
+    let binding = context
+        .bind_layer_to_gl_context(layer, &mut gl_context)
+        .unwrap();
     draw(binding.framebuffer, &Size2D::new(width, height));
     context.present_gl_context(binding, &layer_rect).unwrap();
     context.end_transaction();
 
     event_loop.run_forever(|event| {
         match event {
-            Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
-                return ControlFlow::Break
-            }
-            Event::WindowEvent { event: WindowEvent::Refresh, .. } => {
+            Event::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                ..
+            } => return ControlFlow::Break,
+            Event::WindowEvent {
+                event: WindowEvent::Refresh,
+                ..
+            } => {
                 // Redraw.
                 context.begin_transaction();
-                let binding = context.bind_layer_to_gl_context(layer, &mut gl_context).unwrap();
+                let binding = context
+                    .bind_layer_to_gl_context(layer, &mut gl_context)
+                    .unwrap();
                 draw(binding.framebuffer, &Size2D::new(width, height));
                 context.present_gl_context(binding, &layer_rect).unwrap();
                 context.end_transaction();

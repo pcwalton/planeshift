@@ -25,5 +25,5 @@ pub mod direct_composition;
 pub mod wayland;
 
 // Special backends
-pub mod gl;
 pub mod alternate;
+pub mod gl;

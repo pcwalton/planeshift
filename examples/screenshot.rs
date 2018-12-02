@@ -9,8 +9,8 @@ use euclid::{Point2D, Rect, Size2D};
 use gl::types::{GLint, GLuint};
 use planeshift::{Connection, LayerContext, SurfaceOptions};
 use std::env;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use winit::{ControlFlow, Event, EventsLoop, WindowBuilder, WindowEvent};
 
 pub fn main() {
@@ -18,7 +18,7 @@ pub fn main() {
     let output_path = match env::args().skip(1).next() {
         None => {
             println!("usage: screenshot OUTPUT.png");
-            return
+            return;
         }
         Some(output_path) => output_path,
     };
@@ -34,11 +34,12 @@ pub fn main() {
 
     // Get our size.
     let hidpi_factor = context.window().unwrap().get_hidpi_factor();
-    let window_size = context.window()
-                             .unwrap()
-                             .get_inner_size()
-                             .unwrap()
-                             .to_physical(hidpi_factor);
+    let window_size = context
+        .window()
+        .unwrap()
+        .get_inner_size()
+        .unwrap()
+        .to_physical(hidpi_factor);
     let (width, height): (u32, u32) = window_size.into();
 
     let layer_size = Size2D::new(window_size.width as f32, window_size.height as f32);
@@ -49,7 +50,9 @@ pub fn main() {
 
     // Create the GL context, and draw.
     let mut gl_context = context.create_gl_context(surface_options).unwrap();
-    let binding = context.bind_layer_to_gl_context(layer, &mut gl_context).unwrap();
+    let binding = context
+        .bind_layer_to_gl_context(layer, &mut gl_context)
+        .unwrap();
     draw(binding.framebuffer, &Size2D::new(width, height));
 
     // Present.
@@ -57,24 +60,32 @@ pub fn main() {
     let quit_event_loop = Arc::new(AtomicBool::new(false));
     let quit = quit_event_loop.clone();
     context.present_gl_context(binding, &layer_rect).unwrap();
-    context.screenshot_hosted_layer(layer).then(Box::new(move |image| {
-        image.save(output_path.clone()).unwrap();
-        quit.store(true, Ordering::SeqCst);
-        drop(proxy.wakeup());
-    }));
+    context
+        .screenshot_hosted_layer(layer)
+        .then(Box::new(move |image| {
+            image.save(output_path.clone()).unwrap();
+            quit.store(true, Ordering::SeqCst);
+            drop(proxy.wakeup());
+        }));
     context.end_transaction();
 
     // Take a screenshot after the transaction finishes.
     event_loop.run_forever(|event| {
         match event {
             _ if quit_event_loop.load(Ordering::SeqCst) => return ControlFlow::Break,
-            Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
-                return ControlFlow::Break
-            }
-            Event::WindowEvent { event: WindowEvent::Refresh, .. } => {
+            Event::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                ..
+            } => return ControlFlow::Break,
+            Event::WindowEvent {
+                event: WindowEvent::Refresh,
+                ..
+            } => {
                 // Redraw.
                 context.begin_transaction();
-                let binding = context.bind_layer_to_gl_context(layer, &mut gl_context).unwrap();
+                let binding = context
+                    .bind_layer_to_gl_context(layer, &mut gl_context)
+                    .unwrap();
                 draw(binding.framebuffer, &Size2D::new(width, height));
                 context.present_gl_context(binding, &layer_rect).unwrap();
                 context.end_transaction();
